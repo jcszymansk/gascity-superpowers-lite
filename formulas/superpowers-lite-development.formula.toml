@@ -21,6 +21,8 @@ description_file = "../assets/workflows/superpowers-lite-development/task-review
 # .gc/worktrees/<rig>/, the only place gc's closed-bead worktree reaper looks
 # ([daemon] auto_reap_closed_bead_worktrees in city.toml). Upstream creates it
 # at <rig>/worktrees/ and nothing ever removes it (gastownhall/gascity#4492, gastownhall/gascity-packs#510).
+# It also accepts rigs without an origin remote, basing the worktree on the
+# rig's configured default_branch instead of failing.
 [[steps]]
 id = "prepare-worktree"
 title = "Prepare item worktree"

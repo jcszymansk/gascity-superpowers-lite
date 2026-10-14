@@ -24,30 +24,46 @@ setup only. Do not edit source files in the launcher checkout.
    worktree reaper finds and removes it once the source anchor is closed and the
    tree is idle, clean and fully merged. Hard-fail if `GC_CITY`, `GC_RIG` or
    `GC_RIG_ROOT` is empty; never fall back to `$(pwd)/worktrees`. Run every git
-   command from the rig repository: `cd "$GC_RIG_ROOT"` first. Base the worktree on the up-to-date
-   remote default branch, never the launcher's local `HEAD`, which may be behind
-   `origin`. If the path is missing:
-   - Resolve the remote default branch (do not hardcode `main`). Read the
-     local ref first, and only touch the network if it is missing:
+   command from the rig repository: `cd "$GC_RIG_ROOT"` first. Never base the
+   worktree on the launcher's `HEAD`, which may be stale or on another branch.
+   If the path is missing, pick the base by whether an `origin` remote exists:
+
+   ```sh
+   git remote get-url origin >/dev/null 2>&1 && BASE_MODE=remote || BASE_MODE=local
+   ```
+
+   - **`BASE_MODE=remote`:**
+     - Resolve the remote default branch (do not hardcode `main`). Read the
+       local ref first, and only touch the network if it is missing:
+
+       ```sh
+       DEFAULT_BRANCH=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+       if [ -z "$DEFAULT_BRANCH" ]; then
+         git remote set-head origin --auto >/dev/null 2>&1 || true
+         DEFAULT_BRANCH=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+       fi
+       ```
+
+       If it is still empty, fail closed.
+     - `git fetch --prune origin "$DEFAULT_BRANCH"`. If it fails, fail closed;
+       an unreachable remote is an error, never a reason to use local branches.
+     - `BASE="origin/$DEFAULT_BRANCH"`.
+   - **`BASE_MODE=local`:** no remote, so use the rig's configured
+     `default_branch`, not whatever is checked out:
 
      ```sh
-     DEFAULT_BRANCH=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
-     if [ -z "$DEFAULT_BRANCH" ]; then
-       git remote set-head origin --auto >/dev/null 2>&1 || true
-       DEFAULT_BRANCH=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
-     fi
+     DEFAULT_BRANCH=$(gc --city "$GC_CITY" rig list --json | jq -r --arg rig "$GC_RIG" '.rigs[] | select(.name == $rig) | .default_branch // empty')
      ```
 
-     If it is still empty, fail closed; do not fall back to local `HEAD`.
-   - Fetch it so the base is current:
-     `git fetch --prune origin "$DEFAULT_BRANCH"`.
-   - Create the parent directory and the worktree, detached at the freshly
-     fetched tip:
+     If it is empty, or `git rev-parse --verify --quiet "refs/heads/$DEFAULT_BRANCH^{commit}"`
+     fails, fail closed. `BASE="refs/heads/$DEFAULT_BRANCH"`.
+   - Log `BASE_MODE`, `DEFAULT_BRANCH` and the commit of `BASE`, then create
+     the worktree detached at `BASE`:
 
      ```sh
      WORKTREE="$GC_CITY/.gc/worktrees/$GC_RIG/<source-anchor-id>"
      mkdir -p "$(dirname "$WORKTREE")"
-     git worktree add "$WORKTREE" --detach "origin/$DEFAULT_BRANCH"
+     git worktree add "$WORKTREE" --detach "$BASE"
      ```
 
    If the path exists but is not a worktree of this repository, fail closed.

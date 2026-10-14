@@ -33,9 +33,8 @@ All variables are superpowers' own; see its README. `implementation_formula` and
   `gc.run-operator`, `superpowers.code-quality-reviewer` and the `implementation_target` role.
 - **`[daemon] auto_reap_closed_bead_worktrees = true`** in `city.toml`, for
   `drain_policy=separate`. See "Task worktrees".
-- **An `origin` remote with a default branch**, for `drain_policy=separate`. Each task worktree
-  starts from a freshly fetched `origin/<default branch>`, and the step fails closed when there is no
-  `origin`.
+- **`jq`** on the agents' `PATH`, and for rigs without an `origin` remote, a `default_branch` in
+  the rig's `city.toml` entry. See "Task worktrees".
 
 ## Usage
 
@@ -77,6 +76,10 @@ parent step whole and inherits none of its fields. An unresolvable path fails at
 it; on one rig that was 29 worktrees and 3.2 GB after about 30 tasks. Lite creates it at
 `$GC_CITY/.gc/worktrees/$GC_RIG/<id>`, the only place gc's closed-bead worktree reaper looks, so the
 reaper removes it once the task is closed and the tree is idle, clean and merged.
+
+The worktree never starts from the launcher's `HEAD`. If the rig has an `origin` remote, it starts
+from a freshly fetched `origin/<default branch>`, and a failed fetch stops the task. If the rig has
+no remote at all, it starts from the local branch named by the rig's `default_branch`.
 
 Remove this override once [gastownhall/gascity-packs#510](https://github.com/gastownhall/gascity-packs/issues/510)
 is fixed upstream.
