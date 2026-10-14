@@ -1,0 +1,28 @@
+description = """
+superpowers-development with the per-task double review (spec + quality
+reviewers, up to 6 loops) replaced by one reviewer and at most one re-review.
+"""
+formula = "superpowers-lite-development"
+version = 1
+contract = "graph.v2"
+extends = ["superpowers-development"]
+target_required = true
+
+[[steps]]
+id = "task-review"
+title = "Run single-reviewer task review"
+needs = ["verify-test-passes"]
+metadata = { "gc.run_target" = "superpowers.code-quality-reviewer" }
+expand = "superpowers-lite-task-review"
+expand_vars = { implementation_target = "{{implementation_target}}" }
+description_file = "../assets/workflows/superpowers-lite-development/task-review.md"
+
+# Same step as gascity's do-work prepare-worktree, but the worktree goes under
+# .gc/worktrees/<rig>/, the only place gc's closed-bead worktree reaper looks
+# ([daemon] auto_reap_closed_bead_worktrees in city.toml). Upstream creates it
+# at <rig>/worktrees/ and nothing ever removes it (gastownhall/gascity#4492, gastownhall/gascity-packs#510).
+[[steps]]
+id = "prepare-worktree"
+title = "Prepare item worktree"
+metadata = { "gc.run_target" = "gc.run-operator" }
+description_file = "../assets/workflows/superpowers-lite-development/prepare-worktree.md"

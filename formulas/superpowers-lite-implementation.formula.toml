@@ -1,0 +1,42 @@
+description = """
+superpowers-implementation (convoy entry point) draining the lite item formulas.
+"""
+formula = "superpowers-lite-implementation"
+version = 1
+contract = "graph.v2"
+extends = ["superpowers-implementation"]
+target_required = true
+
+[catalog]
+name = "superpowers-lite-implementation"
+description = "Drain an approved Superpowers convoy with single-reviewer per-task review."
+
+[[steps]]
+id = "drain-separate"
+title = "Drain Superpowers lite development in separate sessions"
+needs = ["prepare"]
+condition = "{{drain_policy}} == separate"
+metadata = { "gc.run_target" = "{{implementation_target}}" }
+description_file = "../assets/workflows/superpowers-implementation/drain-separate.md"
+
+[steps.drain]
+context = "separate"
+formula = "superpowers-lite-development"
+member_access = "exclusive"
+
+[[steps]]
+id = "drain-same-session"
+title = "Drain Superpowers lite development in one shared session"
+needs = ["prepare"]
+condition = "{{drain_policy}} == same-session"
+metadata = { "gc.run_target" = "{{implementation_target}}" }
+description_file = "../assets/workflows/superpowers-implementation/drain-same-session.md"
+
+[steps.drain]
+context = "shared"
+formula = "superpowers-lite-development-item"
+on_item_failure = "skip_remaining"
+member_access = "exclusive"
+
+[steps.drain.item]
+single_lane = true

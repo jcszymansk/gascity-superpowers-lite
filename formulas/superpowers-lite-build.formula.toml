@@ -1,0 +1,53 @@
+description = """
+superpowers-build with a lighter implementation drain: Superpowers brainstorming,
+plan, plan review and decomposition unchanged; each task runs the Superpowers
+TDD steps plus one task reviewer; one whole-branch review at the end.
+"""
+formula = "superpowers-lite-build"
+version = 1
+contract = "graph.v2"
+extends = ["superpowers-build"]
+target_required = true
+
+[catalog]
+name = "superpowers-lite-build"
+description = "Superpowers spec and plan phases, single-reviewer per-task review, one final whole-branch review."
+
+[vars]
+[vars.implementation_formula]
+description = "Superpowers implementation entry formula."
+default = "superpowers-lite-implementation"
+
+[vars.implementation_item_formula]
+description = "Superpowers single-item implementation formula."
+default = "superpowers-lite-development-item"
+
+[[steps]]
+id = "implement"
+title = "Drain Superpowers lite development"
+needs = ["decompose"]
+condition = "{{drain_policy}} == separate"
+metadata = { "gc.run_target" = "{{implementation_target}}" }
+description_file = "../assets/workflows/superpowers-build/implement.md"
+
+[steps.drain]
+context = "separate"
+formula = "superpowers-lite-development"
+member_access = "exclusive"
+
+[[steps]]
+id = "implement-same-session"
+title = "Drain Superpowers lite development in one shared session"
+needs = ["decompose"]
+condition = "{{drain_policy}} == same-session"
+metadata = { "gc.run_target" = "{{implementation_target}}" }
+description_file = "../assets/workflows/superpowers-build/implement-same-session.md"
+
+[steps.drain]
+context = "shared"
+formula = "superpowers-lite-development-item"
+on_item_failure = "skip_remaining"
+member_access = "exclusive"
+
+[steps.drain.item]
+single_lane = true

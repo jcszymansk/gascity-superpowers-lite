@@ -1,0 +1,10 @@
+[pack]
+name = "superpowers-lite"
+version = "0.1.0"
+schema = 2
+
+# Lite overrides superpowers steps by id, so it is tied to this exact
+# superpowers revision; bump both together.
+[imports.superpowers]
+source = "https://github.com/gastownhall/gascity-packs/tree/main/superpowers"
+version = "sha:390cac1a8a0478b6dfde603dae00a43ed9748d13"

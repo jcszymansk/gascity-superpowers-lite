@@ -1,0 +1,20 @@
+description = """
+superpowers-development-item with the per-task double review (spec + quality
+reviewers, up to 6 loops) replaced by one reviewer and at most one re-review.
+"""
+formula = "superpowers-lite-development-item"
+version = 1
+contract = "graph.v2"
+extends = ["superpowers-development-item"]
+internal = true
+single_lane = true
+target_required = true
+
+[[steps]]
+id = "task-review"
+title = "Run single-reviewer task review"
+needs = ["verify-test-passes"]
+metadata = { "gc.run_target" = "superpowers.code-quality-reviewer" }
+expand = "superpowers-lite-task-review"
+expand_vars = { implementation_target = "{{implementation_target}}" }
+description_file = "../assets/workflows/superpowers-lite-development/task-review.md"

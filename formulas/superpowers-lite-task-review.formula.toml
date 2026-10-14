@@ -1,0 +1,50 @@
+description = """
+Single-reviewer Superpowers per-task review (superpowers v6 shape).
+
+One reviewer reads the task diff once and returns both a spec-compliance and a
+code-quality verdict. The implementer applies the findings in one pass. A second
+review runs only when the implementer could not clear every required finding.
+"""
+formula = "superpowers-lite-task-review"
+type = "expansion"
+version = 1
+contract = "graph.v2"
+
+[vars]
+[vars.implementation_target]
+description = "Superpowers task implementation role used for the fix lane."
+default = "superpowers.implementer"
+
+[[template]]
+id = "{target}.superpowers-lite-task-review-loop"
+title = "Run single-reviewer task review"
+metadata = { "gc.run_target" = "gc.run-operator" }
+description_file = "../assets/workflows/superpowers-lite-task-review/{target}.superpowers-lite-task-review-loop.md"
+
+[template.check]
+max_attempts = 2
+
+[template.check.check]
+mode = "exec"
+path = ".gc/scripts/checks/implementation-review-approved.sh"
+timeout = "10m"
+
+[[template.children]]
+id = "{target}.task-review"
+title = "Superpowers task review: spec compliance and code quality"
+metadata = { "gc.run_target" = "superpowers.code-quality-reviewer" }
+description_file = "../assets/workflows/superpowers-lite-task-review/{target}.task-review.md"
+
+[[template.children]]
+id = "{target}.apply-task-review-findings"
+title = "Apply Superpowers task review findings"
+needs = ["{target}.task-review"]
+metadata = { "gc.run_target" = "{implementation_target}", "gc.continuation_group" = "superpowers-item-review-fixes" }
+description_file = "../assets/workflows/superpowers-lite-task-review/{target}.apply-task-review-findings.md"
+
+[[template]]
+id = "{target}"
+title = "Finalize Superpowers task review"
+needs = ["{target}.superpowers-lite-task-review-loop"]
+metadata = { "gc.run_target" = "gc.run-operator" }
+description_file = "../assets/workflows/superpowers-task-review/{target}.md"
