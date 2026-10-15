@@ -9,6 +9,7 @@ review after each task changes:
 |---|---|---|
 | Reviewers per task | two: spec compliance, then code quality | one, returning both verdicts in one pass |
 | Fix rounds per task | up to 6 review loops | the implementer fixes once; a second review runs only if it could not clear every required finding |
+| Lasting documents | stay with the other artifacts | requirements, design and final report are committed to the integration branch (see "Build documents") |
 
 ## Formulas
 
@@ -20,8 +21,8 @@ review after each task changes:
 | `superpowers-lite-development-item` | `superpowers-development-item` | One task in a shared session (`drain_policy=same-session`). Internal. |
 | `superpowers-lite-task-review` | none (expansion) | The single-reviewer task review loop. |
 
-All variables are superpowers' own; see its README. `implementation_formula` and
-`implementation_item_formula` default to the lite formulas.
+Apart from `docs_dir`, all variables are superpowers' own; see its README.
+`implementation_formula` and `implementation_item_formula` default to the lite formulas.
 
 ## Requirements
 
@@ -49,7 +50,7 @@ then `gc import install`, create a target bead, and sling:
 
 ```sh
 gc sling <rig>/gc.run-operator <bead> --on superpowers-lite-build \
-  --var artifact_root=<rig path>/plans/<name>/build \
+  --var artifact_root=$GC_CITY/.gc/artifacts/<rig>/<name>/build \
   --var drain_policy=separate
 ```
 
@@ -59,15 +60,29 @@ compile, including drains that are already running.
 To switch a running superpowers build to lite at implementation, let it finish spec approval,
 retire it, and sling `superpowers-lite-build` with `requirements_path` set to the approved spec.
 
+Keep `artifact_root` outside the rig repository. The artifacts (reviews, logs, per-task evidence)
+are not code, and an agent that finds them inside the repository tends to commit them, often to
+the default branch and apart from the code they describe.
+
+## Build documents
+
+`superpowers-lite-build` adds a `commit-docs` step between `finalize` and `publish`. It reads the
+integration branch from `gc.build.finalize_head` and commits the approved requirements, the design
+and the final report to it, under `<docs_dir>/<workflow root id>/` (`docs_dir` defaults to
+`docs/build`). The commit carries a `Bead: <id>` trailer for each source bead, so the documents
+merge together with the code and `publish` pushes both. The step moves the branch by
+compare-and-swap and fails, leaving the branch alone, if `finalize` merged or moved it.
+
 ## How the borrowed step texts resolve
 
-Five lite steps reuse superpowers' prose: the two `implement` steps of `superpowers-lite-build`,
-the two `drain-*` steps of `superpowers-lite-implementation`, and the finalize step of
-`superpowers-lite-task-review`. They point at `../assets/workflows/superpowers-*/...`, paths that do
-not exist in this repo. That is intended: per the Gas City formula spec, a `../assets/...` path
-resolves through the same layer order as the formula itself, so it finds the superpowers pack's
-file. An override step must name its `description_file` again, because a child step replaces the
-parent step whole and inherits none of its fields. An unresolvable path fails at compile time.
+Six lite steps reuse prose from other packs: the two `implement` steps and `publish` of
+`superpowers-lite-build`, the two `drain-*` steps of `superpowers-lite-implementation`, and the
+finalize step of `superpowers-lite-task-review`. They point at `../assets/workflows/superpowers-*/...`
+or `../assets/workflows/build-base/...`, paths that do not exist in this repo. That is intended: per
+the Gas City formula spec, a `../assets/...` path resolves through the same layer order as the
+formula itself, so it finds the superpowers or gascity pack's file. An override step must name its
+`description_file` again, because a child step replaces the parent step whole and inherits none of
+its fields. An unresolvable path fails at compile time.
 
 ## Task worktrees
 

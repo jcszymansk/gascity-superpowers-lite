@@ -22,6 +22,10 @@ default = "superpowers-lite-implementation"
 description = "Superpowers single-item implementation formula."
 default = "superpowers-lite-development-item"
 
+[vars.docs_dir]
+description = "Repository directory that receives each build's lasting documents, one subdirectory per workflow root."
+default = "docs/build"
+
 [[steps]]
 id = "implement"
 title = "Drain Superpowers lite development"
@@ -51,3 +55,17 @@ member_access = "exclusive"
 
 [steps.drain.item]
 single_lane = true
+
+[[steps]]
+id = "commit-docs"
+title = "Commit the build's lasting documents to its branch"
+needs = ["finalize"]
+metadata = { "gc.run_target" = "gc.run-operator" }
+description_file = "../assets/workflows/superpowers-lite-build/commit-docs.md"
+
+[[steps]]
+id = "publish"
+title = "Optionally publish build result"
+needs = ["commit-docs"]
+metadata = { "gc.run_target" = "gc.publisher" }
+description_file = "../assets/workflows/build-base/publish.md"
