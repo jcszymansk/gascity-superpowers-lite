@@ -10,7 +10,8 @@ Inputs:
 - Read the task bead, then the approved plan at the task bead's
   `gc.build.plan_path`, section `gc.build.plan_task`, and the requirements at
   `gc.build.requirements_path`. Read the plan's global constraints if it has
-  them.
+  them. A work bead without `gc.build.plan_path` has no plan: its description
+  and acceptance criteria are the requirements.
 - Read the implementer's task summary (`gc.implementation.summary_path` on the
   item workflow root). Treat it as unverified claims, including any design
   rationale ("kept simple on purpose" does not lower a finding's severity).

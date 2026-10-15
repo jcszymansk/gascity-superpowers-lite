@@ -20,6 +20,8 @@ review after each task changes:
 | `superpowers-lite-development` | `superpowers-development` | One task in its own session and worktree (`drain_policy=separate`). |
 | `superpowers-lite-development-item` | `superpowers-development-item` | One task in a shared session (`drain_policy=same-session`). Internal. |
 | `superpowers-lite-task-review` | none (expansion) | The single-reviewer task review loop. |
+| `superpowers-lite-work` | gascity `implement` | Bugfixes and small changes with no build plan: drain a convoy of work beads. Sling this. |
+| `superpowers-lite-work-item` | `superpowers-lite-development` | One work bead: TDD, the single-reviewer review, land on its target branch. Internal. |
 
 Apart from `docs_dir`, all variables are superpowers' own; see its README.
 `implementation_formula` and `implementation_item_formula` default to the lite formulas.
@@ -63,6 +65,35 @@ retire it, and sling `superpowers-lite-build` with `requirements_path` set to th
 Keep `artifact_root` outside the rig repository. The artifacts (reviews, logs, per-task evidence)
 are not code, and an agent that finds them inside the repository tends to commit them, often to
 the default branch and apart from the code they describe.
+
+## Work beads (no build plan)
+
+`superpowers-lite-build` suits a feature: brainstorming, a spec, a plan and decomposition before any
+code. For a bugfix or a small change to an existing project, write the bead itself as the
+specification (description and acceptance criteria), put it in a convoy and sling
+`superpowers-lite-work`:
+
+```sh
+gc convoy create <name> <bead>...            # optionally --target <branch>
+gc sling <rig>/gc.run-operator <convoy> --on superpowers-lite-work
+```
+
+Each bead runs `superpowers-lite-work-item` in its own session and worktree: superpowers' TDD
+steps, the single-reviewer task review, a commit with a `Bead: <id>` trailer, then a land step.
+The bead lands on its target branch: the bead's `target` metadata, else the convoy's, else
+`lite/<bead id>`. The default branch is never a target; merging stays a human step. The worktree
+starts from the target branch if it exists, otherwise from the default branch.
+
+The land step's commands are inlined in its step text, since a pack cannot point agents at its
+own scripts. It refuses unless the item's task review passed, the worktree is clean, and the
+target can be fast-forwarded to the item by compare-and-swap. An approved item with no commit
+lands as "nothing to move". A separate drain runs its items at once, so beads that share a target
+must be ordered with `blocks` edges (`gc bd dep add <later> <earlier> --type blocks`); without
+them, every item after the first is refused at land. Beads with their own `lite/<id>` targets
+need no ordering. Only `drain_policy=separate` is supported.
+
+`tests/step-blocks.test.sh` runs the land and commit-docs blocks, cut from their step texts,
+against a throwaway repository.
 
 ## Build documents
 
