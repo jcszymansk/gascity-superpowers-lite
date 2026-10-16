@@ -9,6 +9,10 @@ Make code changes only in the source anchor's `work_dir` worktree. Read the revi
   result. Apply `optional` findings only when they are trivial and local.
 - If you dispute a finding, record the evidence in the summary instead of
   silently skipping it.
+- A test the review asks for that pins behaviour the code already has passes
+  at once; that is expected. Show it is not vacuous by naming the behaviour
+  and inputs it pins in the summary. Never delete, break or revert production
+  code, even briefly, to watch it fail.
 
 Set `code_review.verdict=done` when every required finding is fixed and
 verified, or disputed with evidence. Set `code_review.verdict=iterate` only

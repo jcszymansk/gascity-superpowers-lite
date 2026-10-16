@@ -38,7 +38,8 @@ the integration branch.
    `docs: add the requirements, design and final report of build <ROOT>`.
    `BODY` says these are the lasting documents of workflow `ROOT` and that its
    other artifacts stay under `{{artifact_root}}`. `TRAILERS` holds one
-   `Bead: <id>` line per source bead.
+   `Bead: <id>` line per source bead, followed directly by any other trailers
+   (`Co-Authored-By:`), with no blank line, so git sees them all as trailers.
 3. Set `gc.build.docs_commit=<NEW>` and `gc.build.docs_path=<DEST>` on `ROOT`,
    then close this step with `gc.outcome=pass`.
 
