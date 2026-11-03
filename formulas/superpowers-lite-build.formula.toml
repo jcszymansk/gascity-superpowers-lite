@@ -22,6 +22,12 @@ default = "superpowers-lite-implementation"
 description = "Superpowers single-item implementation formula."
 default = "superpowers-lite-development-item"
 
+# Stock superpowers approves the design and spec autonomously. Here a human
+# signs them off by default, so a design nobody wanted never reaches the plan.
+[vars.brainstorming_approval_mode]
+description = "Superpowers brainstorming approval mode: interactive (a human approves the design and the written spec) or autonomous."
+default = "interactive"
+
 [vars.docs_dir]
 description = "Repository directory that receives each build's lasting documents, one subdirectory per workflow root."
 default = "docs/build"

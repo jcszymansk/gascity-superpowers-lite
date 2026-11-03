@@ -25,6 +25,9 @@ review after each task changes:
 
 Apart from `docs_dir`, all variables are superpowers' own; see its README.
 `implementation_formula` and `implementation_item_formula` default to the lite formulas.
+`brainstorming_approval_mode` defaults to `interactive` instead of superpowers' `autonomous`, so
+`superpowers-lite-build` mails `human` and waits for approval of the design and again of the
+written spec. Pass `--var brainstorming_approval_mode=autonomous` to let agents approve them.
 
 ## Requirements
 
