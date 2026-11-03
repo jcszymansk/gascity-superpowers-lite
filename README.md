@@ -48,10 +48,14 @@ Import the pack where the formulas should be visible, for example at city scope 
 
 ```toml
 [imports.superpowers-lite]
-source = "/path/to/gascity-superpowers-lite"
+source = "https://github.com/jcszymansk/gascity-superpowers-lite"
+version = "sha:<commit>"
 ```
 
-then `gc import install`, create a target bead, and sling:
+The repository has no release tags yet, so pin a commit. While editing the pack, point `source` at
+a local clone instead, as described below.
+
+Then run `gc import install`, create a target bead, and sling:
 
 ```sh
 gc sling <rig>/gc.run-operator <bead> --on superpowers-lite-build \
@@ -59,8 +63,9 @@ gc sling <rig>/gc.run-operator <bead> --on superpowers-lite-build \
   --var drain_policy=separate
 ```
 
-A local-path import is read in place, so edits to this repo take effect on the next formula
-compile, including drains that are already running.
+A local-path import (`source = "/path/to/gascity-superpowers-lite"`, written into the TOML by hand,
+with no `version`) is read in place, so edits to the clone take effect on the next formula compile,
+including drains that are already running.
 
 To switch a running superpowers build to lite at implementation, let it finish spec approval,
 retire it, and sling `superpowers-lite-build` with `requirements_path` set to the approved spec.
