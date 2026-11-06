@@ -250,9 +250,40 @@ Run as `[steps.check]` exec checks after every attempt, before any review:
 | `tests-intact` | the diff deletes a test, or adds a skip or ignore marker |
 | `report-valid` | the executor's report is missing or fails its schema |
 
-The scripts ship in `assets/scripts/checks/`. gc does not install a pack's scripts into rigs, so
-they reach `<rig>/.gc/scripts/checks/` by hand, as the gascity validator does today (see the
-gcexp CLAUDE.md). The README documents the install.
+The scripts ship in the pack's `assets/scripts/checks/` and run from there. A check written as
+`path = "../assets/scripts/checks/<name>.sh"` is rewritten at compile time to the absolute path
+in the highest-priority formula layer that ships it (`internal/formula/parser.go`,
+`resolveCheckPaths`), and the dispatcher trusts paths beside any formula layer
+(`internal/dispatch/ralph.go`, `ralphCheckTrustedAbsoluteRoots`). Verified in the scratch city: a
+pack formula's check compiled to `<pack>/assets/scripts/checks/scope-ok.sh`. Nothing is copied into
+rigs, and scripts find their siblings through their own directory.
+
+The gascity pack has shipped its checks the same way since before `390cac1a`, but its formulas at
+that pin still name `.gc/scripts/checks/...`; gascity-packs main has moved 29 check paths to the
+`../assets/` form, while superpowers on main still uses `.gc/scripts`. Lite's own steps use the
+`../assets/` form throughout, including where they reuse gascity's `build-artifact-valid.sh`,
+which then runs beside its own validator and schemas. That removes the gcexp CLAUDE.md
+workaround ("give the validator its schemas") for every step lite owns.
+
+### Scripts agents run
+
+Steps that need a script but are not checks (land, commit-docs, pasting the kind checklist into
+a card, recording an escalation) call pack commands instead of inlining shell in step text. A
+directory `commands/<name>/run.sh` becomes `gc <binding> <name>`, and gc runs it with
+`GC_PACK_DIR` set to the pack, so it reaches anything under `assets/`. The gascity pack's own
+claim step works this way (`gc gc claim`). Verified in the scratch city: `gc tp hello one two`
+ran the pack's script with `GC_PACK_DIR` and the arguments, and the script called a sibling in
+`assets/scripts/`.
+
+Two conditions, both documented in the README:
+
+- Lite is imported at city scope. A rig-only import does not expose its commands, from the city
+  directory or from the rig.
+- The binding is named `superpowers-lite`. Step text names the command as
+  `gc superpowers-lite <name>`, as gascity's prompts assume the binding `gc`.
+
+This also retires v1's inlined land and commit-docs blocks, and the 4096-byte step text limit
+stops constraining them.
 
 ## Calibration and metrics
 
@@ -320,6 +351,9 @@ To verify in a scratch city before or during phase 1:
 4. Whether gc records token usage for pi and other non-Claude harnesses. Calibration and
    `[[pricing]]` depend on it.
 5. Whether provider names may contain dots. Slots use `lite-` with a dash until this is known.
+6. Whether a lite formula's `../assets/scripts/checks/build-artifact-valid.sh` resolves to the
+   gascity pack's copy when gascity is imported only through superpowers. The parser searches
+   every formula layer, so it should; verify on the real import graph.
 
 Risks:
 
