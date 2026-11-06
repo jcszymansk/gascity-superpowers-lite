@@ -148,10 +148,10 @@ def prepared(world: World) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def sealed(world: World) -> None:
+def sealed(world: World, card: str = CARD) -> None:
     prepared(world)
     world.artifacts.mkdir(parents=True, exist_ok=True)
-    (world.artifacts / "card.draft.md").write_text(CARD)
+    (world.artifacts / "card.draft.md").write_text(card)
     result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
     assert result.returncode == 0, result.stderr
 
@@ -527,6 +527,25 @@ def test_land_and_close_anchor(world: World) -> None:
     assert closed.returncode == 0, closed.stderr
     assert world.bead(ANCHOR)["status"] == "closed"
     assert world.meta("s-close")["gc.outcome"] == "pass"
+
+
+def test_verify_restores_the_worktree_that_done_when_dirtied_so_land_succeeds(world: World) -> None:
+    messy = "grep -q fixed src/app.txt && mkdir -p cache build && touch cache/residue build/kept && echo noise >> tests/app_test.txt"
+    sealed(world, CARD.replace('done_when = ["grep -q fixed src/app.txt"]', f"done_when = [{json.dumps(messy)}]"))
+    attempted(world, "t1", "fixed\n")
+    commit = world.meta("s-att-t1")["lite.attempt_commit"]
+    result = verified(world, "t1")
+    assert result.returncode == 0, result.stderr
+    assert world.meta("s-ver-t1")["lite.checks"] == "passed"
+    assert git(world.worktree, "rev-parse", "HEAD") == commit
+    assert git(world.worktree, "status", "--porcelain") == ""
+    assert not (world.worktree / "cache").exists()
+    assert (world.worktree / "build" / "kept").exists()
+    assert world.run("verdict", "approve").returncode == 0
+    landed = world.claim_and_run("s-land", "land", "land")
+    assert landed.returncode == 0, landed.stderr
+    assert world.meta("s-land")["gc.outcome"] == "pass"
+    assert git(world.rig, "rev-parse", f"refs/heads/lite/{ANCHOR}") == commit
 
 
 def test_land_refuses_without_an_approved_attempt(world: World) -> None:

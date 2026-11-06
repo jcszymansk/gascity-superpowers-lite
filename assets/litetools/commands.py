@@ -582,7 +582,18 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
             results.append(checks.CheckResult("diff-scope", False, ("the attempt changed nothing",)))
         results.append(checks.diff_scope(parsed, card.value.files))
         results.append(checks.tests_intact(parsed, changes.value.unified))
+        head = gitops.rev(workdir.value, "HEAD")
+        if isinstance(head, Err):
+            return head
         results.append(checks.card_done(card.value.done_when, workdir.value, DONE_WHEN_TIMEOUT_SECONDS))
+        # done_when commands leave build products (__pycache__, coverage files)
+        # that would make land refuse the worktree as dirty.
+        residue = gitops.is_clean(workdir.value)
+        if isinstance(residue, Ok) and not residue.value:
+            log.info("done_when left changes in %s; restoring %s", workdir.value, head.value)
+        restored = gitops.reset_to(workdir.value, head.value)
+        if isinstance(restored, Err):
+            return restored
     summary = {r.name: ("pass" if r.passed else "fail") for r in results}
     log.info("checks for %s %s: %s", item.anchor.bead_id, tier.value, summary)
     failed = [r for r in results if not r.passed]
