@@ -248,15 +248,26 @@ card ─► executor-t1 ─► checks ─┬─ pass ─► card-reviewer ─┬
   output as `{"next": [{"action": "land"}]}`, or `t2`, or `t3`, or `blocked`. Its `on_complete`
   bonds `superpowers-lite-next` with that action. `superpowers-lite-next` uses `condition` on
   the action to contain either the human approval gate, the attempt and another verify (which
-  bonds `superpowers-lite-next` again), or only `land`. This compiles on gc 1.5.1, including the
-  self-bond; see "Open questions" for what only a live run can show.
+  bonds `superpowers-lite-next` again), or only `land`. A live run on gc 1.5.1 confirmed it
+  end to end (see "Open questions").
+- `superpowers-lite-next` must be `type = "expansion"` with `[[template]]` steps; `fanout`
+  refuses a workflow formula. Its fragments join the item workflow (`gc.root_bead_id` is the
+  item root, `gc.dynamic_fragment=true`), and the item's `workflow-finalize` waits for the
+  whole chain.
+- Template fields use single braces (`gc.run_target = "superpowers-lite.executor-{action}"`);
+  `condition` keeps double braces (`{{action}} == t3`). Item vars such as `issue` do not reach
+  the fragments on their own, so the bond passes them: `vars = { action = "{item.action}",
+  issue = "{{issue}}" }` in the item formula and `issue = "{issue}"` in the self-bond.
 - An authored step cannot `need` the compiler's generated `<step>-fanout` control, so `land`
   cannot follow the verify step in the item formula; it lives in `superpowers-lite-next`.
-- Fallback if the state machine fails at run time: a static ladder with gate steps run by
+- `blocked` is a verify step that closes with `gc.outcome=fail` and `next: []`: no fragment is
+  bonded, and the item and its drain fail.
+- Fallback if the state machine had failed at run time: a static ladder with gate steps run by
   `operator`, as compound-engineering does for its optional review lanes
   (`compound-code-review.formula.toml:93-103`). It costs one cheap agent turn per gate and
   about twice the beads (see "Open questions").
-- The T3 approval (D3) is a `human` gate, one of gc's built-in gate types.
+- The T3 approval (D3) is a `human` gate, one of gc's built-in gate types. The approval step
+  needs `gc.run_target` set to `operator`; without one it stays open with no owner.
 - Every attempt starts from the item's base commit (D4). The `gc.continuation_group` of v1 does
   not span attempts, since each runs on a different agent.
 - The item records `lite.kind`, the tier that passed or `blocked`, and per failed attempt the
@@ -378,20 +389,22 @@ by compiling formulas with `gc formula show` and reading gc's source. No control
 |---|---|---|
 | 1 | Can a gate be a script instead of an agent? | No. Gate types are `gh:run`, `gh:pr`, `timer`, `human` and `mail`; `condition` is decided at compile time. Escalation uses the `on_complete` state machine instead (see "Per-item loop"), which needs no gate. |
 | 2 | Can a card schema sit next to `gc.build.decomposition.v1`? | Yes; see "Task card". |
-| 3 | Beads per item | v1 `superpowers-lite-work-item`: 21. Static ladder with gates: 20. State machine: 9 when T1 passes (6 + 3 for land), 14 with a T2 escalation, 7 more for T3. |
+| 3 | Beads per item | v1 `superpowers-lite-work-item`: 21. Static ladder with gates: 20. State machine, compiled: 9 when T1 passes, 14 with a T2 escalation, 7 more for T3. Measured in the live run: 7, 10, and about 5 more for T3. |
 | 4 | Token usage for pi? | No; see "Calibration and metrics". |
 | 5 | Dots in provider names? | No; slots use dashes. |
 | 6 | Does `../assets/scripts/checks/build-artifact-valid.sh` reach gascity's copy through superpowers? | Yes. It compiled to `gascity/assets/scripts/checks/build-artifact-valid.sh` of the `390cac1a` snapshot. |
 
-Still open, needing a live run in a throwaway city with its own supervisor:
+Answered the same day by a live run in a throwaway city (`GC_HOME` plus `GC_ISOLATED=1`, its
+own supervisor and control dispatcher). Agents were suspended and their steps were closed by
+hand with `gc bd update` and `gc bd close`, so no model ran:
 
-1. Whether a `fanout` control waits for its bonded molecules before closing, so the item's
-   `workflow-finalize` covers the whole escalation chain.
-2. Whether bonded molecules inside a drain item inherit the item's work directory and source
-   anchor, so a T2 attempt and `land` act on the right worktree and bead.
-3. How the verify step writes `gc.output_json`: through a pack command the reviewer runs, so
-   the JSON never depends on the model formatting it.
-4. Why gcexp records no model usage facts even for Claude.
+| # | Question | Answer |
+|---|---|---|
+| 7 | Does a `fanout` wait for its bonded molecules, so `workflow-finalize` covers the chain? | Yes. The item root closed only after the last fragment (land, or a failed verify). |
+| 8 | Do bonded fragments act on the item's worktree and source anchor? | Fragments carry the item's root, so steps find the source anchor through `gc.root_bead_id` and read `work_dir` from it as v1 does. Vars like `issue` must be passed through the bond (see "Per-item loop"). |
+| 9 | How does verify write `gc.output_json`? | `gc bd update <step> --set-metadata gc.output_json=...` before closing, which a pack command can run so the JSON never depends on the model formatting it. The command itself is not tested yet. |
+
+Still open: why gcexp records no model usage facts even for Claude.
 
 Risks:
 
