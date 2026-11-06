@@ -91,6 +91,10 @@ def handle_call(state: dict, argv: list[str]) -> int:
         bead_id = queue.pop(0)
         beads[bead_id]["assignee"] = state.get("me", "")
         beads[bead_id]["status"] = "in_progress"
+        # gc 1.5.1 records the claiming session on the bead as well.
+        beads[bead_id].setdefault("metadata", {}).update(
+            {"gc.claimed_at": "2026-01-01T00:00:00Z", "gc.session_id": "s-1", "gc.session_name": "worker-s-1"}
+        )
         print(json.dumps({"action": "work", "bead_id": bead_id, "assignee": state.get("me", "")}))
         return 0
     if argv[:2] == ["runtime", "drain-ack"]:

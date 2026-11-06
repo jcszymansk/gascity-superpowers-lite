@@ -157,7 +157,7 @@ def _sealed_card(ctx: Ctx, item: Item) -> Result[cards.Card, str]:
 def _release_drain_root(ctx: Ctx, bead: Bead) -> Result[None, str]:
     out = ctx.gc.run(
         "bd", "update", bead.bead_id, f"--if-assignee={bead.assignee}", "--assignee=",
-        "--unset-metadata=gc.claimed_at", "--unset-metadata=gc.session_id",
+        "--unset-metadata=gc.claimed_at", "--unset-metadata=gc.session_id", "--unset-metadata=gc.session_name",
     )
     return out if isinstance(out, Err) else Ok(None)
 

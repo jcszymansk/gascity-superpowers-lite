@@ -240,13 +240,15 @@ def test_claim_with_no_work_says_drained(world: World) -> None:
 
 def test_claim_releases_a_drain_item_root_instead_of_working_it(world: World) -> None:
     state = world.state
-    state["beads"]["wf-root"] = {"id": "wf-root", "status": "open", "title": "root", "description": "", "assignee": "", "metadata": {"gc.kind": "workflow", "gc.claimed_at": "x"}}
+    state["beads"]["wf-root"] = {"id": "wf-root", "status": "open", "title": "root", "description": "", "assignee": "", "metadata": {"gc.kind": "workflow"}}
     state["claim_queue"] = ["wf-root"]
     world.save(state)
     result = world.run("claim")
     assert result.returncode == 0 and "drain item root" in result.stdout
     root = world.bead("wf-root")
-    assert root["assignee"] == "" and "gc.claimed_at" not in root["metadata"] and root["status"] != "closed"
+    assert root["assignee"] == "" and root["status"] != "closed"
+    assert root["metadata"] == {"gc.kind": "workflow"}
+    assert world.state["drained"] == 1
 
 
 def test_claim_refuses_a_bead_routed_elsewhere(world: World) -> None:
