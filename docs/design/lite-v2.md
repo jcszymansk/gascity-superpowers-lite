@@ -370,10 +370,13 @@ uses. superpowers is MIT-licensed.
 For the owner to review and file, kept in `gcexp/upstream-drafts/`:
 
 1. Install hooks for an agent's resolved harness. Today `install_agent_hooks` is per agent and
-   does not follow the provider (`internal/config/resolve.go:143`), so moving a slot to pi leaves
-   agents without `.pi/extensions/gc-hooks.js`, which pi's builtin args load.
-2. A rig-level provider alias, for example `[rigs.provider_aliases] lite-t1 = "st-t1"`, so one rig
-   can re-point a slot with one line instead of one patch per agent.
+   does not follow the provider (`internal/config/resolve.go:144`), so moving a slot to pi leaves
+   agents without `.pi/extensions/gc-hooks.js`, which pi's builtin args load. Upstream already
+   tracks this as gascity#4375, with an unmerged fix in #4376, so the draft is a comment there:
+   `gascity-4375-comment-hooks-follow-provider.md`.
+2. Rig-level providers, `[rigs.providers.<name>]` shadowing the city's (or the lighter alias
+   form, `[rigs.provider_aliases] lite-t1 = "st-t1"`), so one rig can re-point a slot with one
+   block instead of one patch per agent: `gascity-rig-provider-overrides.md`.
 
 ## Phases
 
