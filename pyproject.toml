@@ -1,0 +1,22 @@
+[project]
+name = "superpowers-lite-tools"
+version = "0.2.0"
+description = "Deterministic helpers behind the superpowers-lite pack commands"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8", "mypy>=1.10"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["assets"]
+testpaths = ["tests/python"]
+
+[tool.mypy]
+mypy_path = "assets"
+packages = ["litetools"]
+strict = true
+python_version = "3.11"
