@@ -8,3 +8,35 @@ schema = 2
 [imports.superpowers]
 source = "https://github.com/gastownhall/gascity-packs/tree/main/superpowers"
 version = "sha:390cac1a8a0478b6dfde603dae00a43ed9748d13"
+
+# Model slots. Pack agents name only these providers and set no options, so a
+# city moves an agent to another model or harness by redefining its slot under
+# the same name in city.toml. Every default sets effort, because the builtin
+# Claude default is max, and uses full model ids, because gc's aliases lag.
+[providers.lite-t1]
+base = "builtin:claude"
+option_defaults = { model = "claude-haiku-5-5", effort = "medium" }
+
+[providers.lite-t2]
+base = "builtin:claude"
+option_defaults = { model = "claude-sonnet-5", effort = "high" }
+
+[providers.lite-t3]
+base = "builtin:claude"
+option_defaults = { model = "claude-opus-5-5", effort = "high" }
+
+# Requirements, design, plan and card cutting.
+[providers.lite-plan]
+base = "provider:lite-t3"
+
+# Whole-branch review.
+[providers.lite-review]
+base = "provider:lite-t3"
+
+# Second-opinion review, ideally another model family.
+[providers.lite-review-cross]
+base = "provider:lite-t3"
+
+# Operator chores, selectors and gates.
+[providers.lite-ops]
+base = "provider:lite-t1"

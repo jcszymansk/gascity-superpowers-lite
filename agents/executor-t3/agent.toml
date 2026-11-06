@@ -1,0 +1,3 @@
+description = "Lite T3 executor: redoes a task card after T2 failed and a human approved"
+scope = "rig"
+provider = "lite-t3"

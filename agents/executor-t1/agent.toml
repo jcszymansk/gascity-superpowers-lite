@@ -1,0 +1,3 @@
+description = "Lite T1 executor: does one task card on the cheapest slot"
+scope = "rig"
+provider = "lite-t1"

@@ -1,0 +1,3 @@
+description = "Lite card cutter: turns one work bead into one validated task card"
+scope = "rig"
+provider = "lite-plan"
