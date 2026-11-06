@@ -171,9 +171,9 @@ that builds launch commands with gc's own `ResolveProvider` and `BuildProviderLa
 
 Prompts for these agents follow four rules:
 
-1. **No bead lifecycle in cheap agents.** `executor-*` and `card-reviewer` read one card, change
-   code or write one report file, and stop. They do not include the `gc-role-worker` fragment.
-   `operator` and the check scripts close step beads and record outcomes. This is new; the
+1. **No bead lifecycle in any agent.** Every agent claims, finishes and closes its step through
+   pack commands (see "Scripts agents run") and never runs `bd` or `git commit`, or types a bead
+   id. They share the `lite-step-worker` fragment instead of `gc-role-worker`. This is new; the
    upstream packs let every worker manage its own beads.
 2. **Harness-neutral.** No Claude-only tools (Task, AskUserQuestion, slash commands), no
    "follow skill X". Whatever a step needs is in its text or in a file it is told to read.
@@ -182,7 +182,8 @@ Prompts for these agents follow four rules:
    load a skill.
 4. **The drain-root guard ships with the pack**, for each supported harness: a Claude PreToolUse
    hook and a pi extension, as `gcexp/assets/pi/city-guard.js` and `guard-latch-close.py` do
-   today.
+   today. Deferred from phase 1: `claim` already releases a drain root itself, and agents
+   that never run `bd` have nothing to guard.
 
 ## Task card
 
@@ -190,15 +191,13 @@ Prompts for these agents follow four rules:
 validated against a `lite.card.v1` schema. Step text in gc is limited to 4096 bytes, so the card
 never travels in a step description.
 
-The card list itself rides in the decomposition artifact: `gc.build.decomposition.v1` accepts
-extra front matter (tested with a `lite.cards` list), so `decompose` stays schema-valid for the
-base pipeline. gascity's validator can load `lite.card.v1` from an extra schema directory named
-in `GC_BUILD_SCHEMA_ROOTS` (tested: a valid card passes, a card missing a section or
-`card.files` fails), but it checks only presence, not types, and check scripts receive a fixed
-environment that does not carry that variable. Lite therefore ships its own `card-valid` check:
-it sets `GC_BUILD_SCHEMA_ROOTS` to the pack's `schemas/build` for the base rules, then checks
-types and the size cap itself (every card artifact also needs the common `producer` and `trace`
-front matter the validator demands of all build artifacts).
+Phase 1 cards use TOML front matter between `+++` lines (`schema = "lite.card.v1"`, `id`,
+`kind`, `files`, `done_when`) and Markdown sections, validated by lite's own parser
+(`assets/litetools/card.py`), which reports every problem at once. Lite does not use gascity's
+build-artifact validator for cards: it checks presence only, not types, and needs PyYAML and a
+schema root passed through the environment. For phase 2, the card list can ride in the
+decomposition artifact, since `gc.build.decomposition.v1` accepts extra front matter (tested with
+a `lite.cards` list).
 
 | Section | Content |
 |---|---|
@@ -243,7 +242,7 @@ card ─► executor-t1 ─► checks ─┬─ pass ─► card-reviewer ─┬
 
 - The ladder is a small state machine built from `on_complete`, so no agent spends a turn
   deciding whether a later attempt is needed, and attempts that are not needed never exist as
-  beads. The item formula runs prepare, the T1 attempt and a verify step. Verify (run by
+  beads. The item formula runs prepare, cut-card, the T1 attempt and a verify step. Verify (run by
   `card-reviewer`, which first runs the checks through a pack command) writes its structured
   output as `{"next": [{"action": "land"}]}`, or `t2`, or `t3`, or `blocked`. Its `on_complete`
   bonds `superpowers-lite-next` with that action. `superpowers-lite-next` uses `condition` on
@@ -272,34 +271,33 @@ card ─► executor-t1 ─► checks ─┬─ pass ─► card-reviewer ─┬
   not span attempts, since each runs on a different agent.
 - The item records `lite.kind`, the tier that passed or `blocked`, and per failed attempt the
   check or review finding that failed it. Calibration and learnings read these.
-- `land` and `close-source-anchor` stay as in v1, run by `operator`.
+- `land` and `close-anchor` are pack commands run by `operator`. `land` is v1's compare-and-swap
+  block ported to Python; it no longer reads a task review, since it requires the
+  `lite.passed_tier` that only an approving verdict sets.
 
 ### Checks
 
-Run as `[steps.check]` exec checks after every attempt, before any review:
+The `verify` command runs every check in the reviewer's session, before the review:
 
 | Check | Fails when |
 |---|---|
+| `report-valid` | the executor's report is missing or malformed |
+| `executor` | the executor reported a blocker instead of a change |
+| `worktree-clean` | the attempt left uncommitted changes |
+| `diff-scope` | the diff is empty, or touches a file outside `files` |
+| `tests-intact` | the diff deletes a test file, adds a skip or ignore marker, or removes test declarations |
 | `card-done` | any `done_when` command fails |
-| `diff-scope` | the diff touches a file outside `files` |
-| `tests-intact` | the diff deletes a test, or adds a skip or ignore marker |
-| `report-valid` | the executor's report is missing or fails its schema |
-| `card-valid` | runs on `decompose`: a card is missing a section, has a wrong type or exceeds the size cap |
 
-The scripts ship in the pack's `assets/scripts/checks/` and run from there. A check written as
-`path = "../assets/scripts/checks/<name>.sh"` is rewritten at compile time to the absolute path
-in the highest-priority formula layer that ships it (`internal/formula/parser.go`,
-`resolveCheckPaths`), and the dispatcher trusts paths beside any formula layer
-(`internal/dispatch/ralph.go`, `ralphCheckTrustedAbsoluteRoots`). Verified in the scratch city: a
-pack formula's check compiled to `<pack>/assets/scripts/checks/scope-ok.sh`. Nothing is copied into
-rigs, and scripts find their siblings through their own directory.
+Card validity is checked when the card is cut: `cut-card-finish` refuses an invalid card and the
+step stays open until the cutter fixes it. After the checks, `verify` resets the worktree to the
+attempt commit, because `done_when` commands leave build products behind (a Python test run
+leaves `__pycache__/`) that `land` would refuse as a dirty worktree. Ignored files survive.
 
-The gascity pack has shipped its checks the same way since before `390cac1a`, but its formulas at
-that pin still name `.gc/scripts/checks/...`; gascity-packs main has moved 29 check paths to the
-`../assets/` form, while superpowers on main still uses `.gc/scripts`. Lite's own steps use the
-`../assets/` form throughout, including where they reuse gascity's `build-artifact-valid.sh`,
-which then runs beside its own validator and schemas. That removes the gcexp CLAUDE.md
-workaround ("give the validator its schemas") for every step lite owns.
+The checks are not `[steps.check]` scripts, as first planned. A check script runs only after the
+agent has closed its bead, in the controller's environment with a fixed `PATH` and none of the
+project's toolchain, so `done_when` commands such as `nix develop --command ./gradlew test` could
+not run there. (A pack formula's `path = "../assets/scripts/checks/<name>.sh"` does compile to the
+pack's absolute path and is trusted by the dispatcher, should a later check suit that model.)
 
 ### Scripts agents run
 
@@ -318,8 +316,12 @@ Two conditions, both documented in the README:
 - The binding is named `superpowers-lite`. Step text names the command as
   `gc superpowers-lite <name>`, as gascity's prompts assume the binding `gc`.
 
-This also retires v1's inlined land and commit-docs blocks, and the 4096-byte step text limit
-stops constraining them.
+This also retires v1's inlined land block, and the 4096-byte step text limit stops constraining
+it. Phase 1 commands: `claim`, `prepare-worktree`, `cut-card-start`, `cut-card-finish`,
+`attempt-start`, `attempt-finish`, `verify`, `verdict`, `approval`, `approve`, `land` and
+`close-anchor`. `claim` wraps `gc hook --claim --drain-ack --json` and remembers the claimed step
+in a file keyed by session, so later commands need no bead id. Every `bd` call passes
+`--rig $GC_RIG`, because a worktree outside the rig would make gc pick the wrong store.
 
 ## Calibration and metrics
 
@@ -411,6 +413,21 @@ hand with `gc bd update` and `gc bd close`, so no model ran:
 | 8 | Do bonded fragments act on the item's worktree and source anchor? | Fragments carry the item's root, so steps find the source anchor through `gc.root_bead_id` and read `work_dir` from it as v1 does. Vars like `issue` must be passed through the bond (see "Per-item loop"). |
 | 9 | How does verify write `gc.output_json`? | `gc bd update <step> --set-metadata gc.output_json=...` before closing, which a pack command can run so the JSON never depends on the model formatting it. The command itself is not tested yet. |
 
+Answered by the phase 1 lab run (2026-11-06, same throwaway city setup). The pack was imported
+at city scope from the working copy, its agents ran `sleep` instead of a model, and each step was
+played by running the real pack commands inside a live session's environment, through the real
+`gc hook --claim`. Two items ran: one rejected at T1 (diff scope) and T2 (review), approved by a
+human and passed at T3; one approved at T1, landed and closed.
+
+| # | Question | Answer |
+|---|---|---|
+| 11 | Do pack commands get their arguments? | Yes, verbatim, including quoted multi-word values; gc imposes no timeout. |
+| 12 | Are scope=rig agents of a city-scope import created in each rig? | Yes. Rigs need no import of their own. |
+| 13 | What does the T3 gate look like? | A bead of type `gate` with `gc.root_bead_id` set to the item root, which `needs` it. It inherits the bonding step's route (`card-reviewer`), but `bd ready` leaves gates out, so no agent can claim it, and it starts no session. `approve` closes it. |
+| 14 | Beads per item, measured | 8 under the item root when T1 passes, 16 for T1, T2 and T3. |
+| 15 | Does a step run when the step it needs failed? | Yes: `close-anchor` ran after a refused `land`. It checks the landed commit itself and fails safely. |
+| 16 | Can a lab process pose as a session? | Only with a live session's identity: the controller SIGTERMs processes whose `GC_SESSION_ID` names no session it knows (`cmd/gc/session_beads.go`), and `gc hook` without one reports `drain`. |
+
 Traced from gc's source and checked against gcexp's session beads:
 
 | # | Question | Answer |
@@ -421,6 +438,9 @@ Risks:
 
 - The superpowers pin grows heavier with every override (see "Relation to superpowers").
 - Model choices stay opinion until the calibration cards exist, so phase 1 writes them.
+- No model has run a lite v2 step yet. The lab played every agent through the real commands; the
+  phase 1 done criterion (a simpletracker convoy drained with T1 on a cheap model) needs the
+  gcexp city.
 
 ## References
 

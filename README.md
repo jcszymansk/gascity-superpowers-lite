@@ -20,8 +20,9 @@ review after each task changes:
 | `superpowers-lite-development` | `superpowers-development` | One task in its own session and worktree (`drain_policy=separate`). |
 | `superpowers-lite-development-item` | `superpowers-development-item` | One task in a shared session (`drain_policy=same-session`). Internal. |
 | `superpowers-lite-task-review` | none (expansion) | The single-reviewer task review loop. |
-| `superpowers-lite-work` | gascity `implement` | Bugfixes and small changes with no build plan: drain a convoy of work beads. Sling this. |
-| `superpowers-lite-work-item` | `superpowers-lite-development` | One work bead: TDD, the single-reviewer review, land on its target branch. Internal. |
+| `superpowers-lite-work` | none | Bugfixes and small changes with no build plan: drain a convoy of work beads. Sling this. |
+| `superpowers-lite-work-item` | none | One work bead: a task card, a T1 attempt and its verify step. Internal. |
+| `superpowers-lite-next` | none (expansion) | What follows a verify step: a T2 attempt, a human-approved T3 attempt, or land. Internal. |
 
 Apart from `docs_dir`, all variables are superpowers' own; see its README.
 `implementation_formula` and `implementation_item_formula` default to the lite formulas.
@@ -41,6 +42,8 @@ written spec. Pass `--var brainstorming_approval_mode=autonomous` to let agents 
   `drain_policy=separate`. See "Task worktrees".
 - **`jq`** on the agents' `PATH`, and for rigs without an `origin` remote, a `default_branch` in
   the rig's `city.toml` entry. See "Task worktrees".
+- **`python3` 3.11 or later** on the agents' `PATH`, for the pack commands that run
+  `superpowers-lite-work` (standard library only).
 
 ## Usage
 
@@ -83,25 +86,82 @@ specification (description and acceptance criteria), put it in a convoy and slin
 
 ```sh
 gc convoy create <name> <bead>...            # optionally --target <branch>
-gc sling <rig>/gc.run-operator <convoy> --on superpowers-lite-work
+gc sling <rig>/superpowers-lite.operator <convoy> --on superpowers-lite-work
 ```
 
-Each bead runs `superpowers-lite-work-item` in its own session and worktree: superpowers' TDD
-steps, the single-reviewer task review, a commit with a `Bead: <id>` trailer, then a land step.
-The bead lands on its target branch: the bead's `target` metadata, else the convoy's, else
-`lite/<bead id>`. The default branch is never a target; merging stays a human step. The worktree
-starts from the target branch if it exists, otherwise from the default branch.
+Each bead becomes one item, run by the pack's own agents, each step in a fresh session:
 
-The land step's commands are inlined in its step text, since a pack cannot point agents at its
-own scripts. It refuses unless the item's task review passed, the worktree is clean, and the
-target can be fast-forwarded to the item by compare-and-swap. An approved item with no commit
-lands as "nothing to move". A separate drain runs its items at once, so beads that share a target
-must be ordered with `blocks` edges (`gc bd dep add <later> <earlier> --type blocks`); without
-them, every item after the first is refused at land. Beads with their own `lite/<id>` targets
-need no ordering. Only `drain_policy=separate` is supported.
+1. `operator` creates the item's worktree at `$GC_CITY/.gc/worktrees/<rig>/<bead>`.
+2. `card-cutter` turns the bead into one task card: the files the change may touch, the code it
+   depends on, numbered steps, and `done_when` commands that pass only when the work is done. The
+   card is validated, and the checklist for its kind (`bugfix` or `tdd-feature`, from
+   `assets/kinds/`) is pasted in.
+3. `executor-t1` does the card in the worktree. The pack command it finishes with commits the work.
+4. `card-reviewer` runs the checks, then reviews the diff against the card. The checks fail an
+   attempt that leaves uncommitted changes, changes nothing, touches a file outside the card,
+   deletes or skips a test, or fails a `done_when` command.
+5. An approved attempt lands. A rejected one escalates: the worktree is reset to its base and
+   `executor-t2` gets the card plus the findings and diff of the failed attempt. A rejected T2
+   attempt mails `human` and waits for approval of a T3 attempt (see "Approving a T3 attempt").
+   A rejected T3 attempt fails the item.
+6. `operator` lands the attempt on the item's target branch and closes the bead.
 
-`tests/step-blocks.test.sh` runs the land and commit-docs blocks, cut from their step texts,
-against a throwaway repository.
+The target branch is the bead's `target` metadata, else the convoy's, else `lite/<bead id>`. The
+default branch is never a target; merging stays a human step. The worktree starts from the target
+branch if it exists, otherwise from the default branch. Land moves the target by compare-and-swap
+and refuses when the target moved since the item started. A drain runs its items at once, so beads
+that share a target must be ordered with `blocks` edges (`gc bd dep add <later> <earlier> --type
+blocks`); beads with their own `lite/<id>` targets need no ordering.
+
+The work bead records the outcome: `lite.kind`, one `lite.attempt.<tier>` entry per attempt
+(`approved` or the check or review finding that rejected it), `lite.passed_tier`, and
+`lite.result` (`landed`, `blocked`, `uncuttable` or `land-refused`). Cards, reports, diffs and
+findings are kept under `$GC_CITY/.gc/artifacts/<rig>/superpowers-lite/<bead>/`.
+
+### Approving a T3 attempt
+
+T3 runs on the most expensive slot, so it waits for a person. The mail names the command:
+
+```sh
+gc superpowers-lite approve --rig <rig> <bead>
+```
+
+It closes the item's approval gate and needs no agent environment. Leave the mail alone to keep
+the item waiting.
+
+### Agents and model slots
+
+The agents name only model slots, providers declared in `pack.toml`, so a city moves an agent to
+another model or harness by redefining its slot under the same name in `city.toml`:
+
+| Agent | Slot | Default model |
+|---|---|---|
+| `operator` | `lite-ops` | as `lite-t1` |
+| `card-cutter` | `lite-plan` | as `lite-t3` |
+| `executor-t1`, `card-reviewer` | `lite-t1` | `claude-haiku-5-5`, effort medium |
+| `executor-t2` | `lite-t2` | `claude-sonnet-5`, effort high |
+| `executor-t3` | `lite-t3` | `claude-opus-5-5`, effort high |
+
+```toml
+[providers.lite-t1]
+base = "builtin:pi"
+option_defaults = { model = "opencode-go/deepseek-v4.1-flash" }
+```
+
+`lite-review` and `lite-review-cross` are declared for later phases. A city-scope import puts the
+agents in every rig; rigs need no import of their own.
+
+### Pack commands
+
+Agents never run `bd`, `git commit` or `git push`, and never type a bead id. Each step's text names
+`gc superpowers-lite <command>`, which finds the agent's claimed step, does the work, records the
+result and closes the step: `claim`, `prepare-worktree`, `cut-card-start`, `cut-card-finish`,
+`attempt-start`, `attempt-finish`, `verify`, `verdict`, `approval`, `land` and `close-anchor`.
+The code is in `assets/litetools/`; every command logs to
+`$GC_CITY/.gc/runtime/superpowers-lite/commands.log`.
+
+Tests: `uv sync`, then `uv run pytest` and `uv run mypy`. `tests/step-blocks.test.sh` runs the
+commit-docs block, cut from its step text, against a throwaway repository.
 
 ## Build documents
 
