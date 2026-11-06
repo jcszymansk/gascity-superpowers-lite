@@ -569,6 +569,8 @@ def test_land_refuses_when_a_sibling_moved_the_target(world: World) -> None:
     assert result.returncode == 0
     assert world.meta("s-land")["gc.outcome"] == "fail"
     assert "a sibling landed first" in world.bead("s-land")["close_reason"]
+    assert world.meta(ANCHOR)["lite.result"] == "land-refused"
+    assert world.bead(ANCHOR)["status"] == "open"
 
 
 def test_close_anchor_fails_when_close_is_refused(world: World) -> None:

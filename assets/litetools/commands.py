@@ -713,6 +713,9 @@ def land(ctx: Ctx) -> Outcome:
         return _fail(ctx, item.step, f"{anchor.bead_id} lacks work_dir, target or lite.base_commit")
     landed = gitops.land(ctx.env.rig_root, workdir.value, target, base, f"land {item.root.bead_id}")
     if isinstance(landed, Err):
+        recorded = ctx.gc.set_metadata(anchor.bead_id, {"lite.result": "land-refused"})
+        if isinstance(recorded, Err):
+            log.warning("could not record the refused land on %s: %s", anchor.bead_id, recorded.error)
         return _fail(ctx, item.step, f"refused: {landed.error}")
     recorded = ctx.gc.set_metadata(anchor.bead_id, {"lite.landed_commit": landed.value.commit, "lite.result": "landed"})
     if isinstance(recorded, Err):
