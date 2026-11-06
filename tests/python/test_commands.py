@@ -198,9 +198,17 @@ def test_prepare_worktree_uses_the_parent_convoy_target_and_refuses_the_default_
     state["beads"][PARENT]["metadata"]["target"] = "main"
     world.save(state)
     result = world.claim_and_run("s-prep", "prepare-worktree", "prepare-worktree")
-    assert result.returncode == 1
-    assert "only a human merges into it" in result.stderr
-    assert world.bead("s-prep")["status"] == "in_progress"
+    assert result.returncode == 0
+    assert world.meta("s-prep")["gc.outcome"] == "fail"
+    assert "only a human merges into it" in world.bead("s-prep")["close_reason"]
+
+
+def test_verify_closes_failed_when_the_checks_cannot_run(world: World) -> None:
+    prepared(world)
+    result = verified(world, "t1")
+    assert result.returncode == 0
+    assert world.meta("s-ver-t1")["gc.outcome"] == "fail"
+    assert "could not read" in world.bead("s-ver-t1")["close_reason"]
 
 
 def test_prepare_worktree_bases_on_an_existing_target(world: World) -> None:

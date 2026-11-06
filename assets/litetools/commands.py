@@ -224,11 +224,21 @@ def _default_branch(ctx: Ctx) -> Result[str, str]:
 
 
 def prepare_worktree(ctx: Ctx) -> Outcome:
-    """Create the item's worktree on its target branch and record it on the anchor."""
+    """Create the item's worktree on its target branch and record it on the anchor.
+
+    Any failure closes the step as failed, so the item fails instead of stalling.
+    """
     found = _claimed_step(ctx, "prepare-worktree")
     if isinstance(found, Err):
         return found
-    item = found.value
+    prepared = _prepare(ctx, found.value)
+    if isinstance(prepared, Err):
+        return _fail(ctx, found.value.step, prepared.error)
+    closed = _close_step(ctx, found.value.step, "pass", prepared.value)
+    return closed if isinstance(closed, Err) else Ok(Done(f"Prepared: {prepared.value}.", drain=True))
+
+
+def _prepare(ctx: Ctx, item: Item) -> Result[str, str]:
     rig = ctx.env.rig_root
     anchor = item.anchor
     default = _default_branch(ctx)
@@ -287,10 +297,7 @@ def prepare_worktree(ctx: Ctx) -> Outcome:
     if any(check.value.meta(k) != v for k, v in recorded_meta.items()):
         return Err(f"metadata on {anchor.bead_id} did not read back as written")
     layout.root.mkdir(parents=True, exist_ok=True)
-    closed = _close_step(ctx, item.step, "pass", f"worktree {worktree} on {target} at {base_commit}")
-    if isinstance(closed, Err):
-        return closed
-    return Ok(Done(f"Prepared {worktree} for {target} at {base_commit}.", drain=True))
+    return Ok(f"worktree {worktree} on {target} at {base_commit}")
 
 
 # --- cut-card ----------------------------------------------------------------
@@ -530,11 +537,18 @@ def _findings_text(tier: Tier, results: list[checks.CheckResult], extra: str = "
 
 
 def verify(ctx: Ctx) -> Outcome:
-    """Run the checks on an attempt; reject it outright or hand it to review."""
+    """Run the checks on an attempt; reject it outright or hand it to review.
+
+    An error that stops the checks from running closes the step as failed.
+    """
     found = _claimed_step(ctx, "verify")
     if isinstance(found, Err):
         return found
-    item = found.value
+    result = _verify(ctx, found.value)
+    return _fail(ctx, found.value.step, result.error) if isinstance(result, Err) else result
+
+
+def _verify(ctx: Ctx, item: Item) -> Outcome:
     tier_result = step_tier(item.step)
     if isinstance(tier_result, Err):
         return tier_result
