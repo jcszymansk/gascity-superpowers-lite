@@ -38,6 +38,7 @@ def _parser() -> argparse.ArgumentParser:
     decide.add_argument("choice", choices=[v.value for v in Verdict])
     decide.add_argument("--reason", help="the problems found; required to reject")
     approve = sub.add_parser("approve")
+    approve.add_argument("--rig", help="the rig that holds the work bead (default: $GC_RIG, else the current directory's)")
     approve.add_argument("anchor", help="the work bead whose t3 attempt to approve")
     return parser
 
@@ -82,26 +83,34 @@ def _dispatch(ctx: Ctx, args: argparse.Namespace) -> Outcome:
         return commands.attempt_finish(ctx, args.summary, args.blocked)
     if args.command == "verdict":
         return commands.verdict(ctx, Verdict(args.choice), args.reason)
-    return commands.approve(ctx, args.anchor)
+    return Err(f"no handler for {args.command}")
 
 
 def main(argv: Sequence[str], environ: Mapping[str, str]) -> int:
     """Run one command and return its exit status."""
     args = _parser().parse_args(list(argv))
     _setup_logging(environ)
+    log.debug("%s %s", args.command, " ".join(argv[1:]))
+    binary = environ.get("LITE_GC_BIN", "gc")
+    if args.command == "approve":
+        rig = args.rig or environ.get("GC_RIG", "").strip()
+        return _report(args.command, commands.approve(Gc(binary, dict(environ), rig), args.anchor), None)
     env = load_env(environ)
     if isinstance(env, Err):
         print(f"gc superpowers-lite {args.command}: {env.error}", file=sys.stderr)
         return 1
-    gc = Gc(environ.get("LITE_GC_BIN", "gc"), dict(environ))
-    log.debug("%s %s", args.command, " ".join(argv[1:]))
-    result = _dispatch(Ctx(env.value, gc), args)
+    gc = Gc(binary, dict(environ), env.value.rig)
+    return _report(args.command, _dispatch(Ctx(env.value, gc), args), gc)
+
+
+def _report(command: str, result: Outcome, gc: Gc | None) -> int:
+    """Print a command's outcome, drain-ack when it asks to, and return the exit status."""
     if isinstance(result, Err):
-        log.error("%s refused: %s", args.command, result.error)
-        print(f"gc superpowers-lite {args.command}: {result.error}", file=sys.stderr)
+        log.error("%s refused: %s", command, result.error)
+        print(f"gc superpowers-lite {command}: {result.error}", file=sys.stderr)
         return 1
     print(result.value.message, flush=True)
-    if result.value.drain:
+    if result.value.drain and gc is not None:
         acked = gc.run("runtime", "drain-ack")
         if isinstance(acked, Err):
             log.warning("drain-ack failed: %s", acked.error)

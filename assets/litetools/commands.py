@@ -155,8 +155,8 @@ def _sealed_card(ctx: Ctx, item: Item) -> Result[cards.Card, str]:
 
 
 def _release_drain_root(ctx: Ctx, bead: Bead) -> Result[None, str]:
-    out = ctx.gc.run(
-        "bd", "update", bead.bead_id, f"--if-assignee={bead.assignee}", "--assignee=",
+    out = ctx.gc.bd(
+        "update", bead.bead_id, f"--if-assignee={bead.assignee}", "--assignee=",
         "--unset-metadata=gc.claimed_at", "--unset-metadata=gc.session_id", "--unset-metadata=gc.session_name",
     )
     return out if isinstance(out, Err) else Ok(None)
@@ -489,7 +489,7 @@ def _record_decision(ctx: Ctx, item: Item, tier: Tier, decision: Decision, why: 
         body = (
             f"{item.anchor.bead_id} ({item.anchor.title}) failed at t1 and t2: {why}\n"
             f"Findings: {_layout(ctx, item).findings(tier)}\n"
-            f"Approve a t3 attempt with: gc superpowers-lite approve {item.anchor.bead_id}\n"
+            f"Approve a t3 attempt with: gc superpowers-lite approve --rig {ctx.env.rig} {item.anchor.bead_id}\n"
             "Leave it to keep the item waiting."
         )
         sent = ctx.gc.run("mail", "send", "human", "-s", f"t3 approval needed: {item.anchor.bead_id}", "-m", body)
@@ -653,10 +653,14 @@ def approval(ctx: Ctx) -> Outcome:
     return closed if isinstance(closed, Err) else Ok(Done("Approval recorded.", drain=True))
 
 
-def approve(ctx: Ctx, anchor_id: str) -> Outcome:
-    """Human command: close the open t3 gate of the item serving ``anchor_id``."""
-    roots = ctx.gc.run(
-        "bd", "list", "--metadata-field", f"lite.anchor_id={anchor_id}", "--all",
+def approve(gc: Gc, anchor_id: str) -> Outcome:
+    """Human command: close the open t3 gate of the item serving ``anchor_id``.
+
+    Needs no agent environment, so a human can run it from any shell; ``gc``
+    names the rig whose store holds the item.
+    """
+    roots = gc.bd(
+        "list", "--metadata-field", f"lite.anchor_id={anchor_id}", "--all",
         "--include-ephemeral", "--limit", "0", "--json",
     )
     if isinstance(roots, Err):
@@ -667,8 +671,8 @@ def approve(ctx: Ctx, anchor_id: str) -> Outcome:
         return Err("gc bd list printed unexpected JSON")
     gates: list[str] = []
     for root_id in root_ids:
-        listed = ctx.gc.run(
-            "bd", "list", "--metadata-field", f"gc.root_bead_id={root_id}", "--type", "gate",
+        listed = gc.bd(
+            "list", "--metadata-field", f"gc.root_bead_id={root_id}", "--type", "gate",
             "--include-gates", "--include-ephemeral", "--status", "open,in_progress", "--limit", "0", "--json",
         )
         if isinstance(listed, Err):
@@ -679,7 +683,7 @@ def approve(ctx: Ctx, anchor_id: str) -> Outcome:
             return Err("gc bd list printed unexpected JSON")
     if len(gates) != 1:
         return Err(f"expected one open t3 gate for {anchor_id}, found {len(gates)}: {', '.join(gates)}")
-    closed = ctx.gc.close(gates[0], f"t3 attempt approved for {anchor_id}")
+    closed = gc.close(gates[0], f"t3 attempt approved for {anchor_id}")
     return closed if isinstance(closed, Err) else Ok(Done(f"Approved: closed gate {gates[0]}."))
 
 

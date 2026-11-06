@@ -33,6 +33,14 @@ def flag_values(args: list[str], name: str) -> list[str]:
 
 def handle_call(state: dict, argv: list[str]) -> int:
     beads = state["beads"]
+    if argv[:2] == ["bd", "--rig"]:
+        if argv[2] != state.get("rig", "st"):
+            print(f"unknown rig {argv[2]}", file=sys.stderr)
+            return 1
+        argv = ["bd", *argv[3:]]
+    elif argv[:1] == ["bd"]:
+        print("fake gc: bd call without --rig", file=sys.stderr)
+        return 9
     if argv[:1] == ["--city"] and argv[2:4] == ["rig", "list"]:
         print(json.dumps({"rigs": state.get("rigs", [])}))
         return 0

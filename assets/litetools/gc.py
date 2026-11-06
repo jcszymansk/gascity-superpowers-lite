@@ -76,10 +76,14 @@ class Gc:
     Attributes:
         binary: The gc executable to run.
         env: The environment for gc, normally the agent's own.
+        rig: The rig whose bead store every ``bd`` call uses. Empty lets gc
+            pick the store from the working directory, which a worktree
+            outside the rig would get wrong, so agents always set it.
     """
 
     binary: str
     env: Mapping[str, str]
+    rig: str = ""
 
     def run(self, *args: str) -> Result[str, str]:
         """Run ``gc args...`` and return stdout, or an error naming the call."""
@@ -100,11 +104,16 @@ class Gc:
             return Err(f"gc {' '.join(args[:2])} exited {proc.returncode}: {first[0] if first else ''}")
         return Ok(proc.stdout)
 
+    def bd(self, *args: str) -> Result[str, str]:
+        """Run ``gc bd args...`` against this rig's bead store."""
+        scope = ("--rig", self.rig) if self.rig else ()
+        return self.run("bd", *scope, *args)
+
     def show(self, bead_id: str) -> Result[Bead, str]:
         """Read one bead."""
         if not bead_id.strip():
             return Err("refusing to read a bead with an empty id")
-        out = self.run("bd", "show", bead_id, "--json")
+        out = self.bd("show", bead_id, "--json")
         if isinstance(out, Err):
             return out
         try:
@@ -119,17 +128,17 @@ class Gc:
             return Err("refusing to update a bead with an empty id")
         if not values:
             return Ok(None)
-        args = ["bd", "update", bead_id]
+        args = ["update", bead_id]
         for key, value in values.items():
             args += ["--set-metadata", f"{key}={value}"]
-        out = self.run(*args)
+        out = self.bd(*args)
         return out if isinstance(out, Err) else Ok(None)
 
     def close(self, bead_id: str, reason: str) -> Result[None, str]:
         """Close one bead with a reason."""
         if not bead_id.strip():
             return Err("refusing to close a bead with an empty id")
-        out = self.run("bd", "close", bead_id, "--reason", reason)
+        out = self.bd("close", bead_id, "--reason", reason)
         return out if isinstance(out, Err) else Ok(None)
 
     def claim(self) -> Result[dict[str, object], str]:

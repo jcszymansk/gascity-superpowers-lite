@@ -437,7 +437,7 @@ def test_review_rejection_at_t2_asks_a_human_for_t3(world: World) -> None:
     assert output(world, "s-ver-t2") == {"next": [{"action": "t3"}]}
     mail = world.state["mail"]
     assert len(mail) == 1 and mail[0]["to"] == "human"
-    assert "gc superpowers-lite approve st-1" in mail[0]["body"]
+    assert "gc superpowers-lite approve --rig st st-1" in mail[0]["body"]
     assert "wrong casing" in (world.artifacts / "attempts" / "t2" / "findings.md").read_text()
 
 
@@ -463,6 +463,47 @@ def test_approve_closes_the_single_open_gate(world: World) -> None:
     assert world.bead("g-1")["status"] == "closed"
     again = world.run("approve", ANCHOR)
     assert again.returncode == 1 and "found 0" in again.stderr
+    assert world.state.get("drained", 0) == 0
+
+
+HUMAN_SHELL = {"GC_CITY": "", "GC_RIG": "", "GC_RIG_ROOT": "", "GC_SESSION_ID": ""}
+
+
+def _open_gate(world: World) -> None:
+    state = world.state
+    state["beads"][ROOT]["metadata"]["lite.anchor_id"] = ANCHOR
+    state["beads"]["g-1"] = {"id": "g-1", "status": "open", "title": "gate", "description": "", "assignee": "", "issue_type": "gate", "metadata": {"gc.root_bead_id": ROOT}}
+    world.save(state)
+
+
+def test_approve_runs_from_a_human_shell_with_an_explicit_rig(world: World) -> None:
+    _open_gate(world)
+    result = world.run("approve", "--rig", "st", ANCHOR, env=HUMAN_SHELL)
+    assert result.returncode == 0, result.stderr
+    assert world.bead("g-1")["status"] == "closed"
+
+
+def test_approve_refuses_another_rig(world: World) -> None:
+    _open_gate(world)
+    result = world.run("approve", "--rig", "elsewhere", ANCHOR, env=HUMAN_SHELL)
+    assert result.returncode == 1 and "unknown rig elsewhere" in result.stderr
+    assert world.bead("g-1")["status"] == "open"
+
+
+def test_approve_refuses_two_open_gates(world: World) -> None:
+    _open_gate(world)
+    state = world.state
+    state["beads"]["g-2"] = {**state["beads"]["g-1"], "id": "g-2"}
+    world.save(state)
+    result = world.run("approve", ANCHOR)
+    assert result.returncode == 1 and "found 2" in result.stderr
+    assert world.bead("g-1")["status"] == "open" and world.bead("g-2")["status"] == "open"
+
+
+def test_every_bd_call_names_the_rig(world: World) -> None:
+    sealed(world)
+    bd_calls = [call for call in world.state["calls"] if call[:1] == ["bd"]]
+    assert bd_calls and all(call[1:3] == ["--rig", "st"] for call in bd_calls)
 
 
 def test_approval_step_closes_pass(world: World) -> None:
