@@ -334,10 +334,14 @@ The first cards come from simpletracker's history, then from the other rigs. The
 
 gc records model token usage only for the `claude` and `codex` harness families
 (`internal/worker/invocation_telemetry.go`, `invocationUsageSpecs`); pi, opencode and the rest
-are skipped. gcexp's `.gc/usage.jsonl` holds 4849 compute facts and no model facts at all, not
-even for Claude sessions, for a reason not yet traced. Calibration therefore reads token counts
-from each session's own transcript, and for gateway-billed models (opencode-go, OpenRouter)
-cross-checks against the gateway's usage report.
+are skipped. gc finds Claude transcripts only under `~/.claude/projects`
+(`sessionlog.DefaultSearchPaths`) plus `[daemon] observe_paths`, and ignores
+`CLAUDE_CONFIG_DIR`. A city whose agents run with `CLAUDE_CONFIG_DIR` set records no model facts
+until `observe_paths` names `$CLAUDE_CONFIG_DIR/projects`. That is why gcexp's
+`.gc/usage.jsonl` holds 4849 compute facts and no model facts at all. Calibration reads
+`kind = "model"` facts for Claude and Codex once that is fixed, reads the session's transcript
+for other harnesses, and for gateway-billed models (opencode-go, OpenRouter) cross-checks
+against the gateway's usage report.
 
 The per-item records also give an escalation rate per kind: a kind that never escalates can
 start on a cheaper slot, and one that escalates often can start at T2.
@@ -404,7 +408,11 @@ hand with `gc bd update` and `gc bd close`, so no model ran:
 | 8 | Do bonded fragments act on the item's worktree and source anchor? | Fragments carry the item's root, so steps find the source anchor through `gc.root_bead_id` and read `work_dir` from it as v1 does. Vars like `issue` must be passed through the bond (see "Per-item loop"). |
 | 9 | How does verify write `gc.output_json`? | `gc bd update <step> --set-metadata gc.output_json=...` before closing, which a pack command can run so the JSON never depends on the model formatting it. The command itself is not tested yet. |
 
-Still open: why gcexp records no model usage facts even for Claude.
+Traced from gc's source and checked against gcexp's session beads:
+
+| # | Question | Answer |
+|---|---|---|
+| 10 | Why does gcexp record no model usage facts even for Claude? | gc searches `~/.claude/projects` for transcripts, but gcexp's agents run with `CLAUDE_CONFIG_DIR=~/.config/claude-priv`. `gc session logs mayor` fails the same way and succeeds once the real `projects` directory is on the search path. See "Calibration and metrics". |
 
 Risks:
 
