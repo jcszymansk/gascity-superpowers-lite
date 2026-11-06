@@ -1,0 +1,6 @@
+rig = "simpletracker"
+base = "614ed3765447acd634f25ed4de1553b7a2311291"
+solution = "2e2f167bc43fd6adec68a43c15829e3240d1e291"
+subject = "fix(core): scan import tokens instead of line prefixes"
+notes = "Bugfix with a real defect (comments or line breaks between import tokens hide a forbidden import; imports inside comments and strings must not count). The original solution is about 190 lines of tokenizer, so this is the hardest card and may exceed a junior hour; behaviour is pinned by the four new tests plus the existing ones, and the exact output format ('File.kt:LINE: import path') is the main trap."
+tests = ["core/src/jvmTest/kotlin/io/github/jcszymansk/simpletracker/core/architecture/CommonMainPortabilityTest.kt"]

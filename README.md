@@ -163,6 +163,15 @@ The code is in `assets/litetools/`; every command logs to
 Tests: `uv sync`, then `uv run pytest` and `uv run mypy`. `tests/step-blocks.test.sh` runs the
 commit-docs block, cut from its step text, against a throwaway repository.
 
+### Calibration cards
+
+`calibration/<rig>/<slug>/` holds cards rebuilt from real commits, for replaying against
+different slot bindings (the calibration formula comes in a later phase). `source.toml` names the
+base commit, the solution commit and its test files. Each card's first `done_when` command fails
+at the base with the solution's tests added and passes at the solution. The first four come from
+simpletracker: `time-input`, `entry-draft` and `set-time-worked` (`tdd-feature`), and
+`import-token-scan` (`bugfix`, the hardest, a hand-written tokenizer).
+
 ## Build documents
 
 `superpowers-lite-build` adds a `commit-docs` step between `finalize` and `publish`. It reads the

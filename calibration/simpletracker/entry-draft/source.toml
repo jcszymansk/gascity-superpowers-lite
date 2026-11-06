@@ -1,0 +1,6 @@
+rig = "simpletracker"
+base = "291eca9236cd07b0e147cb830b1bcebe7349af5d"
+solution = "9cb25f7f959810e27ee642916d1df93451994d76"
+subject = "feat(core): validate entry drafts without Compose"
+notes = "Smallest card: one new class composing three existing validators; fair test of following an ordering rule (project, task, time) and reusing Outcome without exceptions. Tricky only in that the Err from an inner validator must be returned as-is, not rewrapped."
+tests = ["core/src/commonTest/kotlin/io/github/jcszymansk/simpletracker/core/draft/EntryDraftTest.kt"]

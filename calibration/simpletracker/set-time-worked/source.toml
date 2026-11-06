@@ -1,0 +1,6 @@
+rig = "simpletracker"
+base = "d0b05218a032b6833569e528bd0236f4d4455b00"
+solution = "24bfa786cb1b1df6fec6e7635a08dbc5d415b231"
+subject = "feat(core): add setTimeWorked repository write path"
+notes = "Small interface-plus-implementation change with an existing near-duplicate (resetTime) to generalise; tricky bit is replacing resetTime's body by delegation instead of copying it, and keeping failed-write and unavailable-repository behaviour identical."
+tests = ["core/src/commonTest/kotlin/io/github/jcszymansk/simpletracker/core/repo/JsonEntryRepositoryTest.kt"]

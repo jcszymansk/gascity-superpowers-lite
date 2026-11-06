@@ -1,0 +1,6 @@
+rig = "simpletracker"
+base = "2e2f167bc43fd6adec68a43c15829e3240d1e291"
+solution = "291eca9236cd07b0e147cb830b1bcebe7349af5d"
+subject = "feat(core): parse and format H:MM times"
+notes = "Pure core logic, no UI; two test files, one of which exhaustively round-trips 600000 values. Tricky: the ceiling on Minutes (599_999) must be added so parse and format agree, and rejected raw input must be kept untrimmed in InvalidTime."
+tests = ["core/src/commonTest/kotlin/io/github/jcszymansk/simpletracker/core/model/MinutesTest.kt", "core/src/commonTest/kotlin/io/github/jcszymansk/simpletracker/core/model/TimeInputTest.kt"]
