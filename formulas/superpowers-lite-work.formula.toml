@@ -1,32 +1,24 @@
 description = """
 Convoy entry point for work beads that need no build plan: bugfixes and small
-changes to an existing project. Each bead runs superpowers-lite-work-item in
-its own session and worktree and lands on its target branch: the bead's
-`target`, else the convoy's, else `lite/<bead id>`. Beads sharing a target
-must be ordered with blocks edges, or later ones are refused at land.
+changes to an existing project. Each bead becomes one task card and runs the
+tiered loop of superpowers-lite-work-item in its own sessions and worktree,
+then lands on its target branch: the bead's `target`, else the convoy's, else
+`lite/<bead id>`. Beads sharing a target must be ordered with blocks edges, or
+later ones are refused at land.
 """
 formula = "superpowers-lite-work"
-version = 1
+version = 2
 contract = "graph.v2"
-extends = ["implement"]
 target_required = true
 
 [catalog]
 name = "superpowers-lite-work"
-description = "Drain work beads with TDD, one review, and a compare-and-swap land on each bead's target branch."
-
-[vars]
-[vars.implementation_target]
-description = "Role target for implementation work."
-default = "superpowers.implementer"
+description = "Drain work beads through card cutting, tiered attempts, checks, one review and a compare-and-swap land."
 
 [[steps]]
-id = "drain-separate"
-title = "Drain work beads in separate sessions"
-needs = ["prepare"]
-condition = "{{drain_policy}} == separate"
-metadata = { "gc.run_target" = "{{implementation_target}}" }
-description_file = "../assets/workflows/implement/drain-separate.md"
+id = "drain"
+title = "Drain work beads, one item workflow each"
+metadata = { "gc.run_target" = "superpowers-lite.operator" }
 
 [steps.drain]
 context = "separate"

@@ -1,0 +1,73 @@
+description = """
+What follows a verified attempt, bonded by the verify step's on_complete with
+`action` set to t2, t3 or land:
+
+  t2    attempt + verify, which bonds this formula again
+  t3    human gate, approval, attempt + verify, which bonds this formula again
+  land  land + close the work bead
+
+Template fields use single-brace vars ({action}); conditions keep double
+braces. Item vars do not reach fragments on their own, so `issue` is passed
+through every bond.
+"""
+formula = "superpowers-lite-next"
+type = "expansion"
+version = 2
+contract = "graph.v2"
+
+[vars.issue]
+description = "The work bead the item serves."
+required = true
+
+[vars.action]
+description = "t2, t3 or land."
+required = true
+
+# Nothing watches human gates: verify mails `human`, who runs
+# `gc superpowers-lite approve <work bead>` to close this gate.
+[[template]]
+id = "{target}.approve"
+title = "Human approval of a T3 attempt for {issue}"
+condition = "{{action}} == t3"
+metadata = { "gc.run_target" = "superpowers-lite.operator", "lite.step" = "approval" }
+description_file = "../assets/workflows/superpowers-lite-work-item/approval.md"
+
+[template.gate]
+type = "human"
+
+[[template]]
+id = "{target}.attempt"
+title = "{action} attempt for {issue}"
+condition = "{{action}} != land"
+needs = ["{target}.approve"]
+metadata = { "gc.run_target" = "superpowers-lite.executor-{action}", "lite.step" = "attempt", "lite.tier" = "{action}" }
+description_file = "../assets/workflows/superpowers-lite-work-item/attempt.md"
+
+[[template]]
+id = "{target}.verify"
+title = "Verify the {action} attempt for {issue}"
+condition = "{{action}} != land"
+needs = ["{target}.attempt"]
+metadata = { "gc.run_target" = "superpowers-lite.card-reviewer", "lite.step" = "verify", "lite.tier" = "{action}" }
+description_file = "../assets/workflows/superpowers-lite-work-item/verify.md"
+
+[template.on_complete]
+for_each = "output.next"
+bond = "superpowers-lite-next"
+vars = { action = "{item.action}", issue = "{issue}" }
+sequential = true
+
+[[template]]
+id = "{target}.land"
+title = "Land {issue} on its target branch"
+condition = "{{action}} == land"
+metadata = { "gc.run_target" = "superpowers-lite.operator", "lite.step" = "land" }
+description_file = "../assets/workflows/superpowers-lite-work-item/land.md"
+
+[[template]]
+id = "{target}.close-anchor"
+title = "Close the work bead {issue}"
+condition = "{{action}} == land"
+needs = ["{target}.land"]
+metadata = { "gc.run_target" = "superpowers-lite.operator", "lite.step" = "close-anchor" }
+description_file = "../assets/workflows/superpowers-lite-work-item/close-anchor.md"

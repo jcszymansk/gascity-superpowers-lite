@@ -1,59 +1,47 @@
 description = """
-One work bead with no build plan (a bugfix or a small change to an existing
-project): superpowers TDD steps, the single-reviewer task review, then a land
-step that moves the item's target branch by compare-and-swap. The bead is the
-specification. Drained by superpowers-lite-work.
+One work bead through the lite v2 loop: prepare its worktree, cut one task
+card, run a T1 attempt and verify it. The verify step's output picks what
+follows (superpowers-lite-next): land, a T2 attempt, a human-approved T3
+attempt, or nothing when the item is blocked. Drained by superpowers-lite-work.
 """
 formula = "superpowers-lite-work-item"
-version = 1
+version = 2
 contract = "graph.v2"
-extends = ["superpowers-lite-development"]
 target_required = true
 
-# Bases the worktree on the item's target branch when it exists, so items
-# sharing a target stack, and records the target and base for the land step.
 [[steps]]
 id = "prepare-worktree"
-title = "Prepare item worktree on its target branch"
-metadata = { "gc.run_target" = "gc.run-operator" }
+title = "Prepare the item worktree on its target branch"
+metadata = { "gc.run_target" = "superpowers-lite.operator", "lite.step" = "prepare-worktree" }
 description_file = "../assets/workflows/superpowers-lite-work-item/prepare-worktree.md"
 
-# The upstream text reads the approved requirements and plan; here the bead is
-# the whole specification.
 [[steps]]
-id = "implement"
-title = "Inspect the work bead"
+id = "cut-card"
+title = "Cut the task card for {{issue}}"
 needs = ["prepare-worktree"]
-metadata = { "gc.run_target" = "{{implementation_target}}", "gc.continuation_group" = "superpowers-task-{{issue}}", "gc.build.artifact_schema" = "gc.build.implementation-summary.v1", "gc.build.artifact_path_keys" = "gc.implementation.summary_path,gc.build.implementation_summary_path,gc.var.summary_path" }
-description_file = "../assets/workflows/superpowers-lite-work-item/implement.md"
-
-[steps.check]
-max_attempts = 3
-
-[steps.check.check]
-mode = "exec"
-path = ".gc/scripts/checks/build-artifact-valid.sh"
-timeout = "5m"
+metadata = { "gc.run_target" = "superpowers-lite.card-cutter", "lite.step" = "cut-card" }
+description_file = "../assets/workflows/superpowers-lite-work-item/cut-card.md"
 
 [[steps]]
-id = "record-item-result"
-title = "Record and commit the item result"
-needs = ["task-review"]
-metadata = { "gc.run_target" = "{{implementation_target}}", "gc.continuation_group" = "superpowers-task-{{issue}}" }
-description_file = "../assets/workflows/superpowers-lite-work-item/record-item-result.md"
+id = "attempt-t1"
+title = "T1 attempt for {{issue}}"
+needs = ["cut-card"]
+metadata = { "gc.run_target" = "superpowers-lite.executor-t1", "lite.step" = "attempt", "lite.tier" = "t1" }
+description_file = "../assets/workflows/superpowers-lite-work-item/attempt.md"
 
-# The workflow reaches this step whatever the review's outcome, so the review
-# gate lives in the step's commands.
+# The verdict, not a model, decides what follows: verify writes
+# gc.output_json = {"next": [{"action": "land" | "t2"}]} and this bonds one
+# superpowers-lite-next fragment per entry. land lives in the fragment because
+# an authored step cannot need the generated verify-t1-fanout control.
 [[steps]]
-id = "land"
-title = "Land the item on its target branch"
-needs = ["record-item-result"]
-metadata = { "gc.run_target" = "gc.run-operator" }
-description_file = "../assets/workflows/superpowers-lite-work-item/land.md"
+id = "verify-t1"
+title = "Verify the T1 attempt for {{issue}}"
+needs = ["attempt-t1"]
+metadata = { "gc.run_target" = "superpowers-lite.card-reviewer", "lite.step" = "verify", "lite.tier" = "t1" }
+description_file = "../assets/workflows/superpowers-lite-work-item/verify.md"
 
-[[steps]]
-id = "close-source-anchor"
-title = "Close the work bead"
-needs = ["land"]
-metadata = { "gc.run_target" = "gc.run-operator" }
-description_file = "../assets/workflows/superpowers-lite-work-item/close-source-anchor.md"
+[steps.on_complete]
+for_each = "output.next"
+bond = "superpowers-lite-next"
+vars = { action = "{item.action}", issue = "{{issue}}" }
+sequential = true
