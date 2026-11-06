@@ -1,0 +1,512 @@
+"""End-to-end tests of the pack commands against a fake gc and real git."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+PACK = Path(__file__).resolve().parents[2]
+FAKE_GC = Path(__file__).resolve().parent / "fake_gc.py"
+ANCHOR, CONVOY, PARENT, ROOT = "st-1", "st-cv-1", "st-cv-0", "st-wf-1"
+ME = "lite-session-1"
+
+CARD = """+++
+schema = "lite.card.v1"
+id = "st-1"
+kind = "bugfix"
+files = ["src/app.txt", "tests/app_test.txt"]
+done_when = ["grep -q fixed src/app.txt"]
++++
+
+## Goal
+
+The app prints fixed.
+
+## Interfaces
+
+None.
+
+## Context
+
+src/app.txt:1 holds broken.
+
+## Steps
+
+1. Replace broken with fixed.
+
+## Out of scope
+
+Everything else.
+"""
+
+
+def git(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+@dataclass
+class World:
+    """A city, a rig repository, a fake bead store and a way to run commands."""
+
+    tmp: Path
+    city: Path
+    rig: Path
+    state_path: Path
+
+    @property
+    def state(self) -> dict[str, Any]:
+        data: dict[str, Any] = json.loads(self.state_path.read_text())
+        return data
+
+    def save(self, state: dict[str, Any]) -> None:
+        self.state_path.write_text(json.dumps(state))
+
+    def bead(self, bead_id: str) -> dict[str, Any]:
+        bead: dict[str, Any] = self.state["beads"][bead_id]
+        return bead
+
+    def meta(self, bead_id: str) -> dict[str, str]:
+        meta: dict[str, str] = self.bead(bead_id).get("metadata", {})
+        return meta
+
+    def add_step(self, bead_id: str, step: str, tier: str = "", issue_type: str = "task") -> None:
+        state = self.state
+        meta = {"gc.root_bead_id": ROOT, "lite.step": step}
+        if tier:
+            meta["lite.tier"] = tier
+        state["beads"][bead_id] = {"id": bead_id, "status": "open", "title": f"{step} {tier}", "description": f"Run `gc superpowers-lite {step}`.", "assignee": "", "issue_type": issue_type, "metadata": meta}
+        state["claim_queue"] = [bead_id]
+        self.save(state)
+
+    def run(self, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        base = {
+            "PATH": os.environ["PATH"],
+            "HOME": str(self.tmp),
+            "GC_CITY": str(self.city),
+            "GC_RIG": "st",
+            "GC_RIG_ROOT": str(self.rig),
+            "GC_SESSION_ID": ME,
+            "GC_PACK_DIR": str(PACK),
+            "FAKE_GC_STATE": str(self.state_path),
+            "LITE_GC_BIN": str(FAKE_GC),
+            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+        }
+        return subprocess.run([sys.executable, str(PACK / "assets" / "lite.py"), *args], env={**base, **(env or {})}, capture_output=True, text=True, check=False)
+
+    def claim_and_run(self, bead_id: str, step: str, *args: str, tier: str = "") -> subprocess.CompletedProcess[str]:
+        self.add_step(bead_id, step, tier)
+        claimed = self.run("claim")
+        assert claimed.returncode == 0, claimed.stderr
+        return self.run(*args)
+
+    @property
+    def worktree(self) -> Path:
+        return self.city / ".gc" / "worktrees" / "st" / ANCHOR
+
+    @property
+    def artifacts(self) -> Path:
+        return self.city / ".gc" / "artifacts" / "st" / "superpowers-lite" / ANCHOR
+
+
+@pytest.fixture
+def world(tmp_path: Path) -> World:
+    os.chmod(FAKE_GC, 0o755)
+    rig = tmp_path / "rig"
+    rig.mkdir()
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    os.environ.update(env)
+    git(rig, "init", "-q", "-b", "main")
+    (rig / "src").mkdir()
+    (rig / "tests").mkdir()
+    (rig / "src" / "app.txt").write_text("broken\n")
+    (rig / "tests" / "app_test.txt").write_text("#[test]\nfn works() {}\n")
+    (rig / ".gitignore").write_text("build/\n")
+    git(rig, "add", "-A")
+    git(rig, "commit", "-q", "-m", "init")
+    city = tmp_path / "city"
+    city.mkdir()
+    beads = {
+        ANCHOR: {"id": ANCHOR, "status": "open", "title": "fix the app", "description": "It prints broken.", "assignee": "", "metadata": {}},
+        CONVOY: {"id": CONVOY, "status": "open", "title": "unit", "description": "", "assignee": "", "metadata": {"gc.synthetic_kind": "drain-unit-convoy", "gc.drain_member_id": ANCHOR, "gc.parent_convoy_id": PARENT}},
+        PARENT: {"id": PARENT, "status": "open", "title": "convoy", "description": "", "assignee": "", "metadata": {}},
+        ROOT: {"id": ROOT, "status": "open", "title": "item", "description": "", "assignee": "", "metadata": {"gc.kind": "workflow", "gc.input_convoy_id": CONVOY}},
+    }
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"beads": beads, "me": ME, "rigs": [{"name": "st", "default_branch": "main"}]}))
+    return World(tmp_path, city, rig, state_path)
+
+
+def prepared(world: World) -> None:
+    result = world.claim_and_run("s-prep", "prepare-worktree", "prepare-worktree")
+    assert result.returncode == 0, result.stderr
+
+
+def sealed(world: World) -> None:
+    prepared(world)
+    world.artifacts.mkdir(parents=True, exist_ok=True)
+    (world.artifacts / "card.draft.md").write_text(CARD)
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 0, result.stderr
+
+
+def attempted(world: World, tier: str, content: str, extra: dict[str, str] | None = None) -> None:
+    started = world.claim_and_run(f"s-att-{tier}", "attempt", "attempt-start", tier=tier)
+    assert started.returncode == 0, started.stderr
+    (world.worktree / "src" / "app.txt").write_text(content)
+    for name, text in (extra or {}).items():
+        (world.worktree / name).parent.mkdir(parents=True, exist_ok=True)
+        (world.worktree / name).write_text(text)
+    finished = world.run("attempt-finish", "--summary", f"{tier} change")
+    assert finished.returncode == 0, finished.stderr
+
+
+def verified(world: World, tier: str) -> subprocess.CompletedProcess[str]:
+    return world.claim_and_run(f"s-ver-{tier}", "verify", "verify", tier=tier)
+
+
+def output(world: World, step: str) -> Any:
+    return json.loads(world.meta(step)["gc.output_json"])
+
+
+# --- prepare-worktree ----------------------------------------------------------
+
+
+def test_prepare_worktree_creates_the_worktree_and_records_it(world: World) -> None:
+    prepared(world)
+    meta = world.meta(ANCHOR)
+    base = git(world.rig, "rev-parse", "main")
+    assert meta["work_dir"] == str(world.worktree)
+    assert meta["target"] == f"lite/{ANCHOR}"
+    assert meta["lite.base_commit"] == base
+    assert meta["lite.artifact_dir"] == str(world.artifacts)
+    assert world.meta(ROOT)["lite.anchor_id"] == ANCHOR
+    assert git(world.worktree, "rev-parse", "HEAD") == base
+    assert world.bead("s-prep")["status"] == "closed"
+    assert world.meta("s-prep")["gc.outcome"] == "pass"
+    assert world.state["drained"] == 1
+
+
+def test_prepare_worktree_uses_the_parent_convoy_target_and_refuses_the_default_branch(world: World) -> None:
+    state = world.state
+    state["beads"][PARENT]["metadata"]["target"] = "main"
+    world.save(state)
+    result = world.claim_and_run("s-prep", "prepare-worktree", "prepare-worktree")
+    assert result.returncode == 1
+    assert "only a human merges into it" in result.stderr
+    assert world.bead("s-prep")["status"] == "in_progress"
+
+
+def test_prepare_worktree_bases_on_an_existing_target(world: World) -> None:
+    git(world.rig, "branch", "feature/x")
+    git(world.rig, "commit", "-q", "--allow-empty", "-m", "later on main")
+    state = world.state
+    state["beads"][ANCHOR]["metadata"]["target"] = "feature/x"
+    world.save(state)
+    prepared(world)
+    assert world.meta(ANCHOR)["lite.base_commit"] == git(world.rig, "rev-parse", "feature/x")
+
+
+# --- claim -------------------------------------------------------------------------
+
+
+def test_claim_prints_the_step_and_records_it(world: World) -> None:
+    world.add_step("s-x", "verify", "t1")
+    result = world.run("claim")
+    assert result.returncode == 0
+    assert "Claimed step s-x" in result.stdout and "Run `gc superpowers-lite verify`" in result.stdout
+    claims = world.city / ".gc" / "runtime" / "superpowers-lite" / "claims" / f"{ME}.json"
+    assert json.loads(claims.read_text()) == {"bead_id": "s-x"}
+
+
+def test_claim_with_no_work_says_drained(world: World) -> None:
+    result = world.run("claim")
+    assert result.returncode == 0 and "you are drained" in result.stdout
+
+
+def test_claim_releases_a_drain_item_root_instead_of_working_it(world: World) -> None:
+    state = world.state
+    state["beads"]["wf-root"] = {"id": "wf-root", "status": "open", "title": "root", "description": "", "assignee": "", "metadata": {"gc.kind": "workflow", "gc.claimed_at": "x"}}
+    state["claim_queue"] = ["wf-root"]
+    world.save(state)
+    result = world.run("claim")
+    assert result.returncode == 0 and "drain item root" in result.stdout
+    root = world.bead("wf-root")
+    assert root["assignee"] == "" and "gc.claimed_at" not in root["metadata"] and root["status"] != "closed"
+
+
+def test_claim_refuses_a_bead_routed_elsewhere(world: World) -> None:
+    world.add_step("s-x", "verify", "t1")
+    state = world.state
+    state["beads"]["s-x"]["metadata"]["gc.routed_to"] = "other.agent"
+    world.save(state)
+    result = world.run("claim", env={"GC_TEMPLATE": "st/superpowers-lite.card-reviewer"})
+    assert result.returncode == 1 and "routed to other.agent" in result.stderr
+
+
+def test_commands_refuse_a_step_of_another_kind(world: World) -> None:
+    result = world.claim_and_run("s-x", "land", "verify")
+    assert result.returncode == 1
+    assert "is a 'land' step; this command handles 'verify' steps" in result.stderr
+
+
+def test_commands_need_a_claim(world: World) -> None:
+    result = world.run("verify")
+    assert result.returncode == 1 and "run `gc superpowers-lite claim` first" in result.stderr
+
+
+def test_missing_environment_is_refused(world: World) -> None:
+    result = world.run("claim", env={"GC_RIG_ROOT": ""})
+    assert result.returncode == 1 and "missing environment: GC_RIG_ROOT" in result.stderr
+
+
+# --- cut-card ----------------------------------------------------------------------
+
+
+def test_cut_card_start_prints_the_bead_and_template(world: World) -> None:
+    prepared(world)
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-start")
+    assert result.returncode == 0, result.stderr
+    assert "fix the app" in result.stdout and "It prints broken." in result.stdout
+    assert str(world.artifacts / "card.draft.md") in result.stdout
+    assert 'id = "st-1"' in result.stdout
+
+
+def test_cut_card_finish_lists_every_error_and_keeps_the_step_open(world: World) -> None:
+    prepared(world)
+    world.artifacts.mkdir(parents=True, exist_ok=True)
+    (world.artifacts / "card.draft.md").write_text(CARD.replace('kind = "bugfix"', 'kind = "nope"').replace("## Goal", "## Goals"))
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 1
+    assert "'kind' must be one of" in result.stderr and "missing section '## Goal'" in result.stderr
+    assert world.bead("s-cut")["status"] == "in_progress"
+
+
+def test_cut_card_finish_refuses_a_card_for_another_bead(world: World) -> None:
+    prepared(world)
+    world.artifacts.mkdir(parents=True, exist_ok=True)
+    (world.artifacts / "card.draft.md").write_text(CARD.replace('id = "st-1"', 'id = "st-9"'))
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 1 and "must be st-1" in result.stderr
+
+
+def test_cut_card_finish_seals_the_card_with_the_kind_checklist(world: World) -> None:
+    sealed(world)
+    text = (world.artifacts / "card.md").read_text()
+    checklist = (PACK / "assets" / "kinds" / "bugfix.md").read_text().strip()
+    assert text.rstrip().endswith(checklist)
+    assert world.meta(ANCHOR)["lite.kind"] == "bugfix"
+    assert world.meta("s-cut")["gc.outcome"] == "pass"
+
+
+def test_cut_card_blocked_fails_the_item(world: World) -> None:
+    prepared(world)
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish", "--blocked", "the bead names no bug")
+    assert result.returncode == 0
+    assert world.meta("s-cut")["gc.outcome"] == "fail"
+    assert world.meta(ANCHOR)["lite.result"] == "uncuttable"
+
+
+# --- attempts, verify and verdict --------------------------------------------------
+
+
+def test_attempt_finish_commits_and_reports(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "fixed\n")
+    base = world.meta(ANCHOR)["lite.base_commit"]
+    head = git(world.worktree, "rev-parse", "HEAD")
+    assert head != base
+    assert git(world.worktree, "log", "-1", "--format=%s") == "st-1 (t1): t1 change"
+    report = (world.artifacts / "attempts" / "t1" / "report.md").read_text()
+    assert 'status = "done"' in report and f'commit = "{head}"' in report
+    assert world.meta("s-att-t1")["lite.attempt_status"] == "done"
+
+
+def test_attempt_finish_needs_exactly_one_of_summary_or_blocked(world: World) -> None:
+    sealed(world)
+    world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
+    assert world.run("attempt-finish").returncode == 1
+    assert world.run("attempt-finish", "--summary", "a", "--blocked", "b").returncode == 1
+    assert world.run("attempt-finish", "--summary", "  ").returncode == 1
+
+
+def test_clean_t1_attempt_passes_checks_and_approval_lands(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "fixed\n")
+    result = verified(world, "t1")
+    assert result.returncode == 0, result.stderr
+    assert "Every check passed" in result.stdout
+    assert world.meta("s-ver-t1")["lite.checks"] == "passed"
+    assert (world.artifacts / "attempts" / "t1" / "attempt.diff").read_text().count("+fixed") == 1
+    approved = world.run("verdict", "approve")
+    assert approved.returncode == 0, approved.stderr
+    assert output(world, "s-ver-t1") == {"next": [{"action": "land"}]}
+    assert world.meta("s-ver-t1")["gc.outcome"] == "pass"
+    assert world.meta(ANCHOR)["lite.passed_tier"] == "t1"
+    assert world.meta(ANCHOR)["lite.attempt.t1"] == "approved"
+
+
+def test_verdict_needs_passing_checks_and_a_reason_to_reject(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "fixed\n")
+    world.add_step("s-ver-t1", "verify", "t1")
+    assert world.run("claim").returncode == 0
+    early = world.run("verdict", "approve")
+    assert early.returncode == 1 and "run `gc superpowers-lite verify` first" in early.stderr
+    assert world.run("verify").returncode == 0
+    no_reason = world.run("verdict", "reject")
+    assert no_reason.returncode == 1 and "needs --reason" in no_reason.stderr
+
+
+def test_failed_checks_escalate_to_t2_without_review(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "still broken\n", extra={"src/other.txt": "x\n"})
+    result = verified(world, "t1")
+    assert result.returncode == 0, result.stderr
+    assert output(world, "s-ver-t1") == {"next": [{"action": "t2"}]}
+    findings = (world.artifacts / "attempts" / "t1" / "findings.md").read_text()
+    assert "## diff-scope" in findings and "src/other.txt" in findings
+    assert "## card-done" in findings
+    assert world.meta(ANCHOR)["lite.attempt.t1"].startswith("rejected: failed checks: diff-scope, card-done")
+
+
+def test_deleting_a_test_is_rejected(world: World) -> None:
+    sealed(world)
+    world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
+    (world.worktree / "src" / "app.txt").write_text("fixed\n")
+    (world.worktree / "tests" / "app_test.txt").unlink()
+    assert world.run("attempt-finish", "--summary", "drop test").returncode == 0
+    assert verified(world, "t1").returncode == 0
+    assert "tests-intact" in world.meta(ANCHOR)["lite.attempt.t1"]
+
+
+def test_an_attempt_that_changes_nothing_is_rejected(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "broken\n")
+    assert verified(world, "t1").returncode == 0
+    assert output(world, "s-ver-t1") == {"next": [{"action": "t2"}]}
+
+
+def test_a_blocked_attempt_escalates(world: World) -> None:
+    sealed(world)
+    world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
+    assert world.run("attempt-finish", "--blocked", "the file is generated").returncode == 0
+    assert verified(world, "t1").returncode == 0
+    findings = (world.artifacts / "attempts" / "t1" / "findings.md").read_text()
+    assert "the file is generated" in findings
+    assert output(world, "s-ver-t1") == {"next": [{"action": "t2"}]}
+
+
+def test_t2_starts_from_the_base_and_sees_t1_findings(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "still broken\n")
+    assert verified(world, "t1").returncode == 0
+    (world.worktree / "build").mkdir()
+    (world.worktree / "build" / "cache").write_text("keep")
+    (world.worktree / "junk.txt").write_text("drop")
+    started = world.claim_and_run("s-att-t2", "attempt", "attempt-start", tier="t2")
+    assert started.returncode == 0, started.stderr
+    assert git(world.worktree, "rev-parse", "HEAD") == world.meta(ANCHOR)["lite.base_commit"]
+    assert not (world.worktree / "junk.txt").exists()
+    assert (world.worktree / "build" / "cache").exists()
+    assert str(world.artifacts / "attempts" / "t1" / "findings.md") in started.stdout
+
+
+def test_review_rejection_at_t2_asks_a_human_for_t3(world: World) -> None:
+    sealed(world)
+    attempted(world, "t2", "fixed\n")
+    assert verified(world, "t2").returncode == 0
+    result = world.run("verdict", "reject", "--reason", "src/app.txt:1 wrong casing")
+    assert result.returncode == 0, result.stderr
+    assert output(world, "s-ver-t2") == {"next": [{"action": "t3"}]}
+    mail = world.state["mail"]
+    assert len(mail) == 1 and mail[0]["to"] == "human"
+    assert "gc superpowers-lite approve st-1" in mail[0]["body"]
+    assert "wrong casing" in (world.artifacts / "attempts" / "t2" / "findings.md").read_text()
+
+
+def test_rejection_at_t3_blocks_and_fails(world: World) -> None:
+    sealed(world)
+    attempted(world, "t3", "still broken\n")
+    assert verified(world, "t3").returncode == 0
+    assert output(world, "s-ver-t3") == {"next": []}
+    assert world.meta("s-ver-t3")["gc.outcome"] == "fail"
+    assert world.meta(ANCHOR)["lite.result"] == "blocked"
+
+
+# --- approve, land, close -----------------------------------------------------------
+
+
+def test_approve_closes_the_single_open_gate(world: World) -> None:
+    state = world.state
+    state["beads"][ROOT]["metadata"]["lite.anchor_id"] = ANCHOR
+    state["beads"]["g-1"] = {"id": "g-1", "status": "open", "title": "gate", "description": "", "assignee": "", "issue_type": "gate", "metadata": {"gc.root_bead_id": ROOT}}
+    world.save(state)
+    result = world.run("approve", ANCHOR)
+    assert result.returncode == 0, result.stderr
+    assert world.bead("g-1")["status"] == "closed"
+    again = world.run("approve", ANCHOR)
+    assert again.returncode == 1 and "found 0" in again.stderr
+
+
+def test_approval_step_closes_pass(world: World) -> None:
+    result = world.claim_and_run("s-appr", "approval", "approval")
+    assert result.returncode == 0
+    assert world.meta("s-appr")["gc.outcome"] == "pass"
+
+
+def test_land_and_close_anchor(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "fixed\n")
+    assert verified(world, "t1").returncode == 0
+    assert world.run("verdict", "approve").returncode == 0
+    landed = world.claim_and_run("s-land", "land", "land")
+    assert landed.returncode == 0, landed.stderr
+    head = git(world.worktree, "rev-parse", "HEAD")
+    assert git(world.rig, "rev-parse", f"refs/heads/lite/{ANCHOR}") == head
+    assert world.meta(ANCHOR)["lite.landed_commit"] == head
+    assert world.meta(ANCHOR)["lite.result"] == "landed"
+    closed = world.claim_and_run("s-close", "close-anchor", "close-anchor")
+    assert closed.returncode == 0, closed.stderr
+    assert world.bead(ANCHOR)["status"] == "closed"
+    assert world.meta("s-close")["gc.outcome"] == "pass"
+
+
+def test_land_refuses_without_an_approved_attempt(world: World) -> None:
+    prepared(world)
+    result = world.claim_and_run("s-land", "land", "land")
+    assert result.returncode == 0
+    assert world.meta("s-land")["gc.outcome"] == "fail"
+    assert "no approved attempt" in world.bead("s-land")["close_reason"]
+
+
+def test_land_refuses_when_a_sibling_moved_the_target(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "fixed\n")
+    assert verified(world, "t1").returncode == 0
+    assert world.run("verdict", "approve").returncode == 0
+    git(world.rig, "branch", f"lite/{ANCHOR}", "main")
+    git(world.rig, "checkout", "-q", f"lite/{ANCHOR}")
+    git(world.rig, "commit", "-q", "--allow-empty", "-m", "sibling")
+    git(world.rig, "checkout", "-q", "main")
+    result = world.claim_and_run("s-land", "land", "land")
+    assert result.returncode == 0
+    assert world.meta("s-land")["gc.outcome"] == "fail"
+    assert "a sibling landed first" in world.bead("s-land")["close_reason"]
+
+
+def test_close_anchor_fails_when_close_is_refused(world: World) -> None:
+    state = world.state
+    state["beads"][ANCHOR]["metadata"].update({"lite.landed_commit": git(world.rig, "rev-parse", "main"), "target": "main"})
+    state["refuse_close"] = [ANCHOR]
+    world.save(state)
+    result = world.claim_and_run("s-close", "close-anchor", "close-anchor")
+    assert result.returncode == 0
+    assert world.meta("s-close")["gc.outcome"] == "fail"
+    assert world.bead(ANCHOR)["status"] == "open"
