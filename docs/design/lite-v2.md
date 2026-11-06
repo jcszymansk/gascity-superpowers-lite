@@ -140,6 +140,8 @@ that builds launch commands with gc's own `ResolveProvider` and `BuildProviderLa
 - Every slot also becomes an on-demand implicit agent, at city scope and in every rig
   (`InjectImplicitAgents`). It costs nothing until something is slung to it. There is no switch
   to turn it off.
+- Slot names use dashes. A provider named `superpowers-lite.t1` fails validation, because its
+  implicit agent would carry the same name and agent names may not contain dots.
 - Pack agents use only `lite-*` slots. An agent naming `claude` directly fails validation unless
   the city declares `[providers.claude]`.
 - Every slot default sets `effort`. The builtin Claude default is `max`.
@@ -188,6 +190,16 @@ Prompts for these agents follow four rules:
 validated against a `lite.card.v1` schema. Step text in gc is limited to 4096 bytes, so the card
 never travels in a step description.
 
+The card list itself rides in the decomposition artifact: `gc.build.decomposition.v1` accepts
+extra front matter (tested with a `lite.cards` list), so `decompose` stays schema-valid for the
+base pipeline. gascity's validator can load `lite.card.v1` from an extra schema directory named
+in `GC_BUILD_SCHEMA_ROOTS` (tested: a valid card passes, a card missing a section or
+`card.files` fails), but it checks only presence, not types, and check scripts receive a fixed
+environment that does not carry that variable. Lite therefore ships its own `card-valid` check:
+it sets `GC_BUILD_SCHEMA_ROOTS` to the pack's `schemas/build` for the base rules, then checks
+types and the size cap itself (every card artifact also needs the common `producer` and `trace`
+front matter the validator demands of all build artifacts).
+
 | Section | Content |
 |---|---|
 | `goal` | One or two sentences. |
@@ -229,10 +241,22 @@ card ─► executor-t1 ─► checks ─┬─ pass ─► card-reviewer ─┬
                                        checks + card-reviewer ─ fail ─► blocked, mail human
 ```
 
-- Each attempt is its own step bead on its own agent. The T2 and T3 attempts sit behind gates
-  that close them as skipped when an earlier attempt passed, as compound-engineering does for
-  its optional review lanes (`compound-code-review.formula.toml:93-103`).
-- The T3 gate (D3) mails `human` and waits, like lite-build's design approval.
+- The ladder is a small state machine built from `on_complete`, so no agent spends a turn
+  deciding whether a later attempt is needed, and attempts that are not needed never exist as
+  beads. The item formula runs prepare, the T1 attempt and a verify step. Verify (run by
+  `card-reviewer`, which first runs the checks through a pack command) writes its structured
+  output as `{"next": [{"action": "land"}]}`, or `t2`, or `t3`, or `blocked`. Its `on_complete`
+  bonds `superpowers-lite-next` with that action. `superpowers-lite-next` uses `condition` on
+  the action to contain either the human approval gate, the attempt and another verify (which
+  bonds `superpowers-lite-next` again), or only `land`. This compiles on gc 1.5.1, including the
+  self-bond; see "Open questions" for what only a live run can show.
+- An authored step cannot `need` the compiler's generated `<step>-fanout` control, so `land`
+  cannot follow the verify step in the item formula; it lives in `superpowers-lite-next`.
+- Fallback if the state machine fails at run time: a static ladder with gate steps run by
+  `operator`, as compound-engineering does for its optional review lanes
+  (`compound-code-review.formula.toml:93-103`). It costs one cheap agent turn per gate and
+  about twice the beads (see "Open questions").
+- The T3 approval (D3) is a `human` gate, one of gc's built-in gate types.
 - Every attempt starts from the item's base commit (D4). The `gc.continuation_group` of v1 does
   not span attempts, since each runs on a different agent.
 - The item records `lite.kind`, the tier that passed or `blocked`, and per failed attempt the
@@ -249,6 +273,7 @@ Run as `[steps.check]` exec checks after every attempt, before any review:
 | `diff-scope` | the diff touches a file outside `files` |
 | `tests-intact` | the diff deletes a test, or adds a skip or ignore marker |
 | `report-valid` | the executor's report is missing or fails its schema |
+| `card-valid` | runs on `decompose`: a card is missing a section, has a wrong type or exceeds the size cap |
 
 The scripts ship in the pack's `assets/scripts/checks/` and run from there. A check written as
 `path = "../assets/scripts/checks/<name>.sh"` is rewritten at compile time to the absolute path
@@ -296,6 +321,13 @@ in `lite-review-cross`, where simpletracker already uses it.
 The first cards come from simpletracker's history, then from the other rigs. The pack declares
 `[[pricing]]` entries for its default models; cities add their own.
 
+gc records model token usage only for the `claude` and `codex` harness families
+(`internal/worker/invocation_telemetry.go`, `invocationUsageSpecs`); pi, opencode and the rest
+are skipped. gcexp's `.gc/usage.jsonl` holds 4849 compute facts and no model facts at all, not
+even for Claude sessions, for a reason not yet traced. Calibration therefore reads token counts
+from each session's own transcript, and for gateway-billed models (opencode-go, OpenRouter)
+cross-checks against the gateway's usage report.
+
 The per-item records also give an escalation rate per kind: a kind that never escalates can
 start on a cheaper slot, and one that escalates often can start at T2.
 
@@ -339,21 +371,27 @@ For the owner to review and file, kept in `gcexp/upstream-drafts/`:
 
 ## Open questions
 
-To verify in a scratch city before or during phase 1:
+Answered on 2026-11-06 in a scratch city (gc 1.5.1, superpowers and gascity at `390cac1a`),
+by compiling formulas with `gc formula show` and reading gc's source. No controller ran.
 
-1. Whether a gate can be a plain exec check rather than an agent. compound-engineering uses a
-   Haiku agent for its gates; if a script cannot do it, every item pays a few cheap agent turns.
-2. Whether a lite card schema can live next to `gc.build.decomposition.v1`, or whether the
-   decomposition validator rejects the extra fields.
-3. Beads per item. Three attempts plus gates and checks roughly triple them, and the gcexp store
-   already trips the reaper's read timeout and the jsonl growth check. Count on a dry run before
-   fixing the graph.
-4. Whether gc records token usage for pi and other non-Claude harnesses. Calibration and
-   `[[pricing]]` depend on it.
-5. Whether provider names may contain dots. Slots use `lite-` with a dash until this is known.
-6. Whether a lite formula's `../assets/scripts/checks/build-artifact-valid.sh` resolves to the
-   gascity pack's copy when gascity is imported only through superpowers. The parser searches
-   every formula layer, so it should; verify on the real import graph.
+| # | Question | Answer |
+|---|---|---|
+| 1 | Can a gate be a script instead of an agent? | No. Gate types are `gh:run`, `gh:pr`, `timer`, `human` and `mail`; `condition` is decided at compile time. Escalation uses the `on_complete` state machine instead (see "Per-item loop"), which needs no gate. |
+| 2 | Can a card schema sit next to `gc.build.decomposition.v1`? | Yes; see "Task card". |
+| 3 | Beads per item | v1 `superpowers-lite-work-item`: 21. Static ladder with gates: 20. State machine: 9 when T1 passes (6 + 3 for land), 14 with a T2 escalation, 7 more for T3. |
+| 4 | Token usage for pi? | No; see "Calibration and metrics". |
+| 5 | Dots in provider names? | No; slots use dashes. |
+| 6 | Does `../assets/scripts/checks/build-artifact-valid.sh` reach gascity's copy through superpowers? | Yes. It compiled to `gascity/assets/scripts/checks/build-artifact-valid.sh` of the `390cac1a` snapshot. |
+
+Still open, needing a live run in a throwaway city with its own supervisor:
+
+1. Whether a `fanout` control waits for its bonded molecules before closing, so the item's
+   `workflow-finalize` covers the whole escalation chain.
+2. Whether bonded molecules inside a drain item inherit the item's work directory and source
+   anchor, so a T2 attempt and `land` act on the right worktree and bead.
+3. How the verify step writes `gc.output_json`: through a pack command the reviewer runs, so
+   the JSON never depends on the model formatting it.
+4. Why gcexp records no model usage facts even for Claude.
 
 Risks:
 
