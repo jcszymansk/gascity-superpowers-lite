@@ -384,6 +384,7 @@ def cut_card_finish(ctx: Ctx, blocked: str | None) -> Outcome:
 # --- attempt -----------------------------------------------------------------
 
 _LOWER = {Tier.T2: Tier.T1, Tier.T3: Tier.T2}
+MAX_SUBJECT_LENGTH = 72
 
 
 def attempt_start(ctx: Ctx) -> Outcome:
@@ -435,6 +436,17 @@ def attempt_start(ctx: Ctx) -> Outcome:
     return Ok(Done("\n".join(lines)))
 
 
+def _attempt_message(bead_id: str, tier: Tier, summary: str) -> str:
+    """Build an attempt's commit message: a subject of at most 72 characters, the summary, the trailer.
+
+    The ``Bead:`` trailer ties the code to the task's evidence, so it must sit
+    alone in the last paragraph, where git reads trailers.
+    """
+    text = summary.strip()
+    subject = f"{bead_id} ({tier.value}): {text.splitlines()[0]}"[:MAX_SUBJECT_LENGTH].rstrip()
+    return f"{subject}\n\n{text}\n\nBead: {bead_id}\n"
+
+
 def attempt_finish(ctx: Ctx, summary: str | None, blocked: str | None) -> Outcome:
     """Commit the attempt, write its report and close the attempt step."""
     if (summary is None) == (blocked is None):
@@ -456,8 +468,7 @@ def attempt_finish(ctx: Ctx, summary: str | None, blocked: str | None) -> Outcom
     status = reports.Status.DONE if summary is not None else reports.Status.BLOCKED
     commit = ""
     if status is reports.Status.DONE:
-        first = text.strip().splitlines()[0][:72]
-        made = gitops.commit_all(workdir.value, f"{item.anchor.bead_id} ({tier.value}): {first}")
+        made = gitops.commit_all(workdir.value, _attempt_message(item.anchor.bead_id, tier, text))
         if isinstance(made, Err):
             return made
         commit = made.value or ""

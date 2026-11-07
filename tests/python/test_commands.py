@@ -338,6 +338,18 @@ def test_attempt_finish_commits_and_reports(world: World) -> None:
     assert world.meta("s-att-t1")["lite.attempt_status"] == "done"
 
 
+def test_attempt_commit_carries_the_bead_trailer_and_a_short_subject(world: World) -> None:
+    sealed(world)
+    assert world.claim_and_run("s-att", "attempt", "attempt-start", tier="t1").returncode == 0
+    (world.worktree / "src" / "app.txt").write_text("fixed\n")
+    summary = "x" * 100 + "\nsecond line"
+    assert world.run("attempt-finish", "--summary", summary).returncode == 0
+    subject = git(world.worktree, "log", "-1", "--format=%s")
+    assert subject.startswith("st-1 (t1): x") and len(subject) == 72
+    assert git(world.worktree, "log", "-1", "--format=%(trailers:key=Bead,valueonly)") == ANCHOR
+    assert summary in git(world.worktree, "log", "-1", "--format=%b")
+
+
 def test_attempt_finish_needs_exactly_one_of_summary_or_blocked(world: World) -> None:
     sealed(world)
     world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")

@@ -96,7 +96,8 @@ Each bead becomes one item, run by the pack's own agents, each step in a fresh s
    depends on, numbered steps, and `done_when` commands that pass only when the work is done. The
    card is validated, and the checklist for its kind (`bugfix` or `tdd-feature`, from
    `assets/kinds/`) is pasted in.
-3. `executor-t1` does the card in the worktree. The pack command it finishes with commits the work.
+3. `executor-t1` does the card in the worktree. The pack command it finishes with commits the work,
+   with a `Bead: <id>` trailer.
 4. `card-reviewer` runs the checks, then reviews the diff against the card. The checks fail an
    attempt that leaves uncommitted changes, changes nothing, touches a file outside the card,
    deletes or skips a test, or fails a `done_when` command.
