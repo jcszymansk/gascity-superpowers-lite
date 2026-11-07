@@ -453,6 +453,11 @@ Risks:
   dollar-run rule, parse order), and `card-cutter` wrote 105,104 output tokens on Opus for that one
   card against 74,475 for `executor-t1`. So these runs show that Haiku can implement a written
   design, and the cutter stays the main expense.
+- Replays on a rig leak. Cutters inspect git history and the disk unprompted: `smt-rl47`'s Opus cutter
+  read the historical solution in `simpletracker-impl`, and `smt-ura1`'s Sonnet cutter found
+  `smt-rl47`'s card and landed code and copied the card (11 diff lines of 218). Neither run measures
+  how well that model designs, so calibration needs a repository and artifact tree holding only
+  the base snapshot. Executors and reviewers read nothing outside their own item in those runs.
 - The per-item reviewer has rejected once, on a rule the card spelled out. An independent test of
   36 cases found no behavioural fault in that attempt, so the reviewer's ability to catch a
   behavioural bug is still unknown.
