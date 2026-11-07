@@ -13,9 +13,14 @@ there. Then write the card to the printed path:
 - `done_when`: shell commands, run from the worktree root, that pass only when
   the work is done: the new or changed test by name, then the project's build,
   lint and full test commands.
-- `## Context`: paste the code the change depends on, with paths and line
-  ranges, so the executor need not search.
-- `## Steps`: concrete steps a junior developer could follow without asking.
+- `## Interfaces`: signatures and types only, no bodies.
+- `## Context`: quote the code the change depends on, exactly, with paths and
+  line ranges, so the executor need not search. Quote what exists, never what
+  the change will add.
+- `## Steps`: what to change and why, and each test by name with the behaviour
+  it pins down. Settle the decisions a junior developer would otherwise have to
+  ask about, but write no code: the executor writes the tests and the
+  implementation, and the check refuses a card that holds them.
 - No `## Checklist` section; it is pasted for you.
 
 Then run:

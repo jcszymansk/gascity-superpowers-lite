@@ -16,6 +16,13 @@ A card is Markdown with TOML front matter between ``+++`` lines::
 The body must hold every section in ``CUTTER_SECTIONS``. ``## Checklist`` is
 never written by a model: ``seal`` pastes the kind's checklist from the pack,
 so every harness and model gets the same text.
+
+A card holds no implementation. When cards carried code, the executor copied
+98% of its diff from them, so the expensive cutter did the work and a cheap
+executor's pass proved nothing. Only ``## Context`` and ``## Interfaces`` may
+hold fenced code: Context must quote lines that exist in the repository, and
+Interfaces is capped at what signatures need. Everything else the cutter
+writes shares a size cap small enough that a solution cannot fit in it.
 """
 
 from __future__ import annotations
@@ -36,6 +43,10 @@ FENCE = "+++"
 MAX_FILES = 8
 MAX_DONE_WHEN = 8
 MAX_CARD_BYTES = 32 * 1024
+MAX_AUTHORED_BYTES = 8 * 1024
+MAX_INTERFACE_CODE_LINES = 40
+MAX_INLINE_CODE = 120
+MAX_REPORTED_LINES = 5
 CHECKLIST_HEADING = "Checklist"
 
 
@@ -65,7 +76,12 @@ CUTTER_SECTIONS: tuple[Section, ...] = (
     Section.OUT_OF_SCOPE,
 )
 
+CODE_FREE_SECTIONS: tuple[Section, ...] = (Section.GOAL, Section.STEPS, Section.OUT_OF_SCOPE)
+
 _HEADING = re.compile(r"^## (?P<title>.+?)\s*$")
+_CODE_FENCE = re.compile(r"^\s*(```|~~~)")
+_INDENTED_CODE = re.compile(r"^( {4,}|\t)(?![-*+] |\d+[.)] )\S")
+_INLINE_CODE = re.compile(r"`([^`\n]*)`")
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +139,78 @@ def _sections(body: str) -> tuple[tuple[tuple[Section, str], ...], list[str]]:
         elif line.strip() and "text before the first '## ' section" not in errors:
             errors.append("text before the first '## ' section")
     return tuple((name, "\n".join(lines).strip()) for name, lines in found), errors
+
+
+def _split_code(text: str) -> tuple[list[str], list[str]]:
+    """Return a section's prose lines and its fenced code lines, apart.
+
+    An unclosed fence counts as code up to the end of the section.
+    """
+    prose: list[str] = []
+    code: list[str] = []
+    in_fence = False
+    for line in text.splitlines():
+        if _CODE_FENCE.match(line):
+            in_fence = not in_fence
+        elif in_fence:
+            code.append(line)
+        else:
+            prose.append(line)
+    return prose, code
+
+
+def _code_rule_errors(sections: tuple[tuple[Section, str], ...]) -> list[str]:
+    """Return every way the sections break the no-implementation rule."""
+    errors: list[str] = []
+    authored_bytes = 0
+    for section, text in sections:
+        if section is Section.CHECKLIST:
+            continue
+        prose, code = _split_code(text)
+        authored_bytes += len("\n".join(prose).encode("utf-8"))
+        if section is not Section.CONTEXT:
+            authored_bytes += len("\n".join(code).encode("utf-8"))
+        if section is Section.INTERFACES and len(code) > MAX_INTERFACE_CODE_LINES:
+            errors.append(
+                f"'## Interfaces' has {len(code)} lines of code; the cap is "
+                f"{MAX_INTERFACE_CODE_LINES}: give signatures and types, not bodies"
+            )
+        if section not in CODE_FREE_SECTIONS:
+            continue
+        where = f"'## {section.value}'"
+        if code or "```" in text or "~~~" in text:
+            errors.append(f"{where} holds a code block: describe the behaviour, the executor writes the code")
+        if any(_INDENTED_CODE.match(line) for line in prose):
+            errors.append(f"{where} holds a line indented like code: describe the behaviour instead")
+        if any(len(span) > MAX_INLINE_CODE for span in _INLINE_CODE.findall(text)):
+            errors.append(f"{where} holds inline code over {MAX_INLINE_CODE} characters: describe it instead")
+    if authored_bytes > MAX_AUTHORED_BYTES:
+        errors.append(
+            f"the card has {authored_bytes} bytes outside quoted code; the cap is {MAX_AUTHORED_BYTES}: "
+            "cut any solution out of it, or split the task"
+        )
+    return errors
+
+
+def unquoted_context_lines(card: Card, known_lines: frozenset[str]) -> list[str]:
+    """Return an error for ``## Context`` code that is not in the repository.
+
+    Args:
+        card: The parsed card.
+        known_lines: Every line of the repository's tracked files, stripped.
+
+    Returns:
+        Errors naming the first offending lines; empty when every line is real.
+    """
+    _, code = _split_code(card.section(Section.CONTEXT))
+    missing = [line.strip() for line in code if line.strip() and line.strip() not in known_lines]
+    if not missing:
+        return []
+    shown = "; ".join(repr(line) for line in missing[:MAX_REPORTED_LINES])
+    return [
+        f"'## Context' code must quote the repository exactly, with no new code, line numbers or elisions; "
+        f"{len(missing)} lines are not in it, such as {shown}"
+    ]
 
 
 def _relative_path_error(path: str) -> str | None:
@@ -195,6 +283,7 @@ def parse(text: str, *, require_checklist: bool) -> Result[Card, list[str]]:
 
     sections, section_errors = _sections(body)
     errors.extend(section_errors)
+    errors.extend(_code_rule_errors(sections))
     present = {name for name, _ in sections}
     for section in CUTTER_SECTIONS:
         if section not in present:

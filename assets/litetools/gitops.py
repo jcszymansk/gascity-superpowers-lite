@@ -20,6 +20,7 @@ from litetools.result import Err, Ok, Result
 log = logging.getLogger(__name__)
 
 GIT_TIMEOUT_SECONDS = 300
+MAX_SCANNED_FILE_BYTES = 1024 * 1024
 
 
 def git(repo: Path, *args: str) -> Result[str, str]:
@@ -60,6 +61,32 @@ def is_clean(worktree: Path) -> Result[bool, str]:
     """Return whether the worktree has no changes, untracked files included."""
     out = git(worktree, "status", "--porcelain", "--untracked-files=all")
     return Ok(not out.value.strip()) if isinstance(out, Ok) else out
+
+
+def tracked_lines(worktree: Path) -> Result[frozenset[str], str]:
+    """Return every stripped line of the worktree's tracked text files.
+
+    Files that are binary, oversized, symlinks or submodules are skipped: none
+    of them is code a card would quote.
+    """
+    listed = git(worktree, "ls-files", "-z")
+    if isinstance(listed, Err):
+        return listed
+    lines: set[str] = set()
+    for name in filter(None, listed.value.split("\0")):
+        path = worktree / name
+        try:
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_SCANNED_FILE_BYTES:
+                log.debug("not scanning %s", name)
+                continue
+            data = path.read_bytes()
+        except OSError as error:
+            return Err(f"cannot read {path}: {error}")
+        try:
+            lines.update(line.strip() for line in data.decode("utf-8").splitlines())
+        except UnicodeDecodeError:
+            log.debug("not scanning binary file %s", name)
+    return Ok(frozenset(lines))
 
 
 def reset_to(worktree: Path, commit: str) -> Result[None, str]:

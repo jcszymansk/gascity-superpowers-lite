@@ -5,7 +5,9 @@ Do the task card. Run:
 It resets the worktree, then prints the card, the files you may change and,
 after a rejected attempt, why it was rejected. The card is your whole task:
 follow its Steps and Checklist, change only its files, and work only in the
-printed worktree. Run every `done_when` command until all pass.
+printed worktree. The card specifies the change and holds no implementation:
+you write the tests and the code, reading the repository as you need. Run every
+`done_when` command until all pass.
 
 Finish with exactly one of these, then exit:
 

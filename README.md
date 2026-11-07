@@ -92,10 +92,12 @@ gc sling <rig>/superpowers-lite.operator <convoy> --on superpowers-lite-work
 Each bead becomes one item, run by the pack's own agents, each step in a fresh session:
 
 1. `operator` creates the item's worktree at `$GC_CITY/.gc/worktrees/<rig>/<bead>`.
-2. `card-cutter` turns the bead into one task card: the files the change may touch, the code it
-   depends on, numbered steps, and `done_when` commands that pass only when the work is done. The
-   card is validated, and the checklist for its kind (`bugfix` or `tdd-feature`, from
-   `assets/kinds/`) is pasted in.
+2. `card-cutter` turns the bead into one task card: the files the change may touch, the existing
+   code it depends on, numbered steps, and `done_when` commands that pass only when the work is
+   done. A card holds no implementation or test code. The validator allows code blocks only in
+   `## Interfaces` (up to 40 lines of signatures) and `## Context`, whose lines must exist in the
+   repository, and it caps everything else at 8 KiB. The checklist for the card's kind (`bugfix`
+   or `tdd-feature`, from `assets/kinds/`) is then pasted in.
 3. `executor-t1` does the card in the worktree. The pack command it finishes with commits the work,
    with a `Bead: <id>` trailer.
 4. `card-reviewer` runs the checks, then reviews the diff against the card. The checks fail an

@@ -315,6 +315,45 @@ def test_cut_card_finish_seals_the_card_with_the_kind_checklist(world: World) ->
     assert world.meta("s-cut")["gc.outcome"] == "pass"
 
 
+def test_cut_card_finish_refuses_a_solution_in_steps(world: World) -> None:
+    prepared(world)
+    world.artifacts.mkdir(parents=True, exist_ok=True)
+    (world.artifacts / "card.draft.md").write_text(CARD.replace("## Steps\n", "## Steps\n\n```\nnew code\n```\n"))
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 1 and "'## Steps' holds a code block" in result.stderr
+    assert world.bead("s-cut")["status"] == "in_progress"
+
+
+def _card_quoting(world: World, code: str) -> None:
+    world.artifacts.mkdir(parents=True, exist_ok=True)
+    (world.artifacts / "card.draft.md").write_text(CARD.replace("## Context\n", f"## Context\n\n```\n{code}\n```\n"))
+
+
+def test_cut_card_finish_refuses_context_code_not_in_the_repository(world: World) -> None:
+    prepared(world)
+    _card_quoting(world, "made up line")
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 1 and "must quote the repository exactly" in result.stderr
+    assert world.bead("s-cut")["status"] == "in_progress"
+
+
+def test_cut_card_finish_accepts_context_code_from_the_repository(world: World) -> None:
+    prepared(world)
+    tracked = next(path for path in world.worktree.iterdir() if path.is_file())
+    line = next(text for text in tracked.read_text().splitlines() if text.strip())
+    _card_quoting(world, line)
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 0, result.stderr
+
+
+def test_cut_card_finish_refuses_a_worktree_the_cutter_changed(world: World) -> None:
+    prepared(world)
+    (world.worktree / "written_by_the_cutter.txt").write_text("made up line\n")
+    _card_quoting(world, "made up line")
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 1 and "the cutter must change nothing" in result.stderr
+
+
 def test_cut_card_blocked_fails_the_item(world: World) -> None:
     prepared(world)
     result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish", "--blocked", "the bead names no bug")

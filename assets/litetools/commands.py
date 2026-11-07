@@ -338,6 +338,25 @@ def cut_card_start(ctx: Ctx) -> Outcome:
     )
 
 
+def _context_quote_errors(item: Item, card: cards.Card) -> Result[list[str], str]:
+    """Check the card's quoted code against the worktree, which must be untouched.
+
+    A dirty worktree would let code the cutter wrote pass as existing code.
+    """
+    workdir = _workdir(item)
+    if isinstance(workdir, Err):
+        return workdir
+    clean = gitops.is_clean(workdir.value)
+    if isinstance(clean, Err):
+        return clean
+    if not clean.value:
+        return Err(f"the cutter must change nothing, but {workdir.value} has changes; remove them and run this again")
+    known = gitops.tracked_lines(workdir.value)
+    if isinstance(known, Err):
+        return known
+    return Ok(cards.unquoted_context_lines(card, known.value))
+
+
 def cut_card_finish(ctx: Ctx, blocked: str | None) -> Outcome:
     """Validate and seal the cutter's card, then close the step.
 
@@ -365,6 +384,11 @@ def cut_card_finish(ctx: Ctx, blocked: str | None) -> Outcome:
         return Err("fix the card and run this again:\n- " + "\n- ".join(parsed.error))
     if parsed.value.card_id != item.anchor.bead_id:
         return Err(f"the card id must be {item.anchor.bead_id}, not {parsed.value.card_id}")
+    quoted = _context_quote_errors(item, parsed.value)
+    if isinstance(quoted, Err):
+        return quoted
+    if quoted.value:
+        return Err("fix the card and run this again:\n- " + "\n- ".join(quoted.value))
     checklist = _read(cards.checklist_path(ctx.env.pack_dir, parsed.value.kind))
     if isinstance(checklist, Err):
         return checklist

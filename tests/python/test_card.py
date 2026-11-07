@@ -167,3 +167,106 @@ def test_every_kind_ships_a_checklist_that_seals(kind: Kind) -> None:
     front = FRONT.replace('kind = "bugfix"', f'kind = "{kind.value}"')
     assert isinstance(card.seal(cutter_card(front=front), checklist), Ok)
     assert "## " not in checklist
+
+
+FENCED = "```kotlin\nfun main() {\n}\n```"
+
+
+def body_with(section: str, text: str) -> str:
+    assert f"## {section}\n\n" in BODY
+    return BODY.replace(f"## {section}\n\n", f"## {section}\n\n{text}\n\n")
+
+
+@pytest.mark.parametrize("section", ["Goal", "Steps", "Out of scope"])
+@pytest.mark.parametrize("block", [FENCED, "~~~\ncode\n~~~", "```\nunclosed fence"])
+def test_code_blocks_are_refused_in_prose_sections(section: str, block: str) -> None:
+    errors = errors_of(card.parse(cutter_card(body=body_with(section, block)), require_checklist=False))
+    assert any(f"'## {section}' holds a code block" in error for error in errors)
+
+
+@pytest.mark.parametrize("section", ["Interfaces", "Context"])
+def test_code_blocks_are_allowed_in_interfaces_and_context(section: str) -> None:
+    assert isinstance(card.parse(cutter_card(body=body_with(section, FENCED)), require_checklist=False), Ok)
+
+
+@pytest.mark.parametrize("line", ["    val x = 1", "\tval x = 1", "        return x"])
+def test_indented_code_is_refused_in_steps(line: str) -> None:
+    text = f"1. Add this:\n{line}"
+    errors = errors_of(card.parse(cutter_card(body=body_with("Steps", text)), require_checklist=False))
+    assert any("indented like code" in error for error in errors)
+
+
+@pytest.mark.parametrize("line", ["    - a nested bullet", "    1. a nested step", "    2) another", "   continued item text"])
+def test_list_continuations_are_not_indented_code(line: str) -> None:
+    assert isinstance(card.parse(cutter_card(body=body_with("Steps", line)), require_checklist=False), Ok)
+
+
+def test_inline_code_cap_is_exact() -> None:
+    at_cap = "`" + "x" * card.MAX_INLINE_CODE + "`"
+    over = "`" + "x" * (card.MAX_INLINE_CODE + 1) + "`"
+    assert isinstance(card.parse(cutter_card(body=body_with("Steps", at_cap)), require_checklist=False), Ok)
+    errors = errors_of(card.parse(cutter_card(body=body_with("Steps", over)), require_checklist=False))
+    assert any("inline code over" in error for error in errors)
+
+
+def test_long_prose_between_inline_code_spans_is_not_inline_code() -> None:
+    text = "`short` " + "word " * 50 + "`also short`"
+    assert isinstance(card.parse(cutter_card(body=body_with("Steps", text)), require_checklist=False), Ok)
+
+
+def test_interface_code_cap_is_exact() -> None:
+    def block(lines: int) -> str:
+        return "```\n" + "fun f()\n" * lines + "```"
+
+    allowed = body_with("Interfaces", block(card.MAX_INTERFACE_CODE_LINES))
+    assert isinstance(card.parse(cutter_card(body=allowed), require_checklist=False), Ok)
+    over = body_with("Interfaces", block(card.MAX_INTERFACE_CODE_LINES + 1))
+    errors = errors_of(card.parse(cutter_card(body=over), require_checklist=False))
+    assert any("'## Interfaces' has 41 lines of code" in error for error in errors)
+
+
+def test_authored_cap_counts_prose_and_interface_code_but_not_quoted_context() -> None:
+    quoted = "```\n" + "line\n" * 4000 + "```"
+    assert isinstance(card.parse(cutter_card(body=body_with("Context", quoted)), require_checklist=False), Ok)
+
+    for section, text in (("Steps", "word " * 2000), ("Context", "word " * 2000), ("Interfaces", "```\n" + "x" * 9000 + "\n```")):
+        errors = errors_of(card.parse(cutter_card(body=body_with(section, text)), require_checklist=False))
+        assert any("bytes outside quoted code" in error for error in errors), section
+
+
+def test_a_sealed_checklist_does_not_count_against_the_authored_cap() -> None:
+    sealed = card.seal(cutter_card(), "- check\n" * 2000)
+    assert isinstance(sealed, Ok), sealed
+
+
+def parsed_with_context(text: str) -> card.Card:
+    parsed = card.parse(cutter_card(body=body_with("Context", text)), require_checklist=False)
+    assert isinstance(parsed, Ok), parsed
+    return parsed.value
+
+
+def test_context_lines_found_in_the_repository_pass_whatever_their_indent() -> None:
+    known = frozenset({"fun main() {", "}"})
+    assert card.unquoted_context_lines(parsed_with_context("```\n    fun main() {\n\n}\n```"), known) == []
+
+
+def test_context_lines_outside_fences_are_prose() -> None:
+    assert card.unquoted_context_lines(parsed_with_context("src/a.kt:1-2 holds it."), frozenset()) == []
+
+
+def test_new_code_in_context_is_refused_and_named() -> None:
+    errors = card.unquoted_context_lines(parsed_with_context(FENCED), frozenset({"}"}))
+    assert len(errors) == 1 and "1 lines are not in it" in errors[0] and "fun main() {" in errors[0]
+
+
+def test_only_the_first_missing_context_lines_are_shown() -> None:
+    code = "```\n" + "".join(f"line{i}\n" for i in range(card.MAX_REPORTED_LINES + 2)) + "```"
+    errors = card.unquoted_context_lines(parsed_with_context(code), frozenset())
+    assert f"{card.MAX_REPORTED_LINES + 2} lines" in errors[0]
+    assert f"line{card.MAX_REPORTED_LINES - 1}" in errors[0] and f"line{card.MAX_REPORTED_LINES}" not in errors[0]
+
+
+def test_the_template_obeys_the_rule() -> None:
+    text = (PACK / "assets" / "templates" / "card.md").read_text(encoding="utf-8")
+    body = text.split("+++", 2)[2]
+    assert isinstance(card.parse(cutter_card(body=body), require_checklist=False), Ok)

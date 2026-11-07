@@ -32,8 +32,8 @@ and a stranger who imports the pack can bind whatever they have.
   Cheap agents therefore never touch bead lifecycle in v2.
 - **superpowers plans are already written for an executor with no context.** `writing-plans`
   asks for exact file paths, complete code in every step and exact commands with expected
-  output (`superpowers/skills/writing-plans/SKILL.md:10,117-119`). A task card is mostly a
-  self-contained slice of such a plan.
+  output (`superpowers/skills/writing-plans/SKILL.md:10,117-119`). Cards deliberately leave that
+  code out; see "Task card".
 - **Strong planner, cheap editor works elsewhere.** Aider's architect mode with o3 planning and
   GPT-4.1 editing scored 83% on the polyglot benchmark for less than o3 alone. The owner ran a
   similar setup earlier in 2026 with Sonnet planning and gpt-5-mini coding.
@@ -203,9 +203,9 @@ a `lite.cards` list).
 |---|---|
 | `goal` | One or two sentences. |
 | `files` | The files the task may create or change. The scope check enforces it. |
-| `interfaces` | Signatures and types to add or change, written out in full. |
-| `context` | Excerpts of the existing code the change depends on, with paths and line ranges, so the executor does not search. |
-| `steps` | The plan's steps for this task, including its code. |
+| `interfaces` | Signatures and types to add or change, without bodies. At most 40 lines of code. |
+| `context` | Excerpts of the existing code the change depends on, with paths and line ranges, so the executor does not search. Every line of a code block must exist in the repository. |
+| `steps` | What to change and why, and each test by name with the behaviour it pins down. No code. |
 | `done_when` | Commands that must pass: the task's named test, build, lint. |
 | `out_of_scope` | What not to touch, and when to stop with a blocker instead of improvising. |
 | `kind` | One of the task kinds below. |
@@ -215,9 +215,17 @@ Size cap: a handful of files and about an hour of human work. The schema check r
 without every section or over the cap; `plan-review` asks whether a junior developer could finish
 each card without asking anything.
 
-Because a superpowers plan already holds exact paths, code and commands, cutting is mostly
-mechanical. `card-cutter` runs on `lite-plan` in phase 1 for safety; moving it to a cheaper slot
-is a calibration question.
+Cards hold no implementation or test code. In the first real run (simpletracker, 2026-11-07) the
+cards carried it: 305 of 311 and 378 of 386 added lines were verbatim in the card, and `card-cutter`
+on Opus wrote 82,264 output tokens against 37,926 for `executor-t1`. Haiku passed both items without
+having solved anything, and no escalation could happen. `cut-card-finish` now refuses code blocks
+outside `interfaces` and `context`, context lines that are not in the repository, and more than
+8 KiB outside quoted code. `card-cutter` runs on `lite-plan` in phase 1 for safety; moving it to a
+cheaper slot is a calibration question.
+
+This conflicts with phase 2's mechanical cutting: a superpowers plan holds complete code in every
+step, and pasting it into a card would bring the same problem back. Phase 2 has to choose between
+plans without code and cards that leave it out.
 
 ### Task kinds
 
