@@ -458,6 +458,11 @@ Risks:
   `smt-rl47`'s card and landed code and copied the card (11 diff lines of 218). Neither run measures
   how well that model designs, so calibration needs a repository and artifact tree holding only
   the base snapshot. Executors and reviewers read nothing outside their own item in those runs.
+- One clean comparison so far (2026-11-07, a rig holding only the base snapshot, one run each):
+  Opus cut that card with 40,989 output tokens and 1 refusal in about 6 minutes, Sonnet 5 with
+  67,854 tokens and 9 refusals in about 13 minutes. Both cards led Haiku to a T1 pass on all 36
+  independent tests. At list prices Sonnet came out dearer, because its longer session re-read
+  more cache, so `lite-plan` stays on Opus. The 8 KiB cap caused most of the refusals.
 - The per-item reviewer has rejected once, on a rule the card spelled out. An independent test of
   36 cases found no behavioural fault in that attempt, so the reviewer's ability to catch a
   behavioural bug is still unknown.
