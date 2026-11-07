@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -467,8 +468,14 @@ def _attempt_message(bead_id: str, tier: Tier, summary: str) -> str:
     alone in the last paragraph, where git reads trailers.
     """
     text = summary.strip()
-    subject = f"{bead_id} ({tier.value}): {text.splitlines()[0]}"[:MAX_SUBJECT_LENGTH].rstrip()
-    return f"{subject}\n\n{text}\n\nBead: {bead_id}\n"
+    first_sentence = re.split(r"(?<=[.!?])\s", text.splitlines()[0], maxsplit=1)[0].rstrip(".!?")
+    prefix = f"{bead_id} ({tier.value}): "
+    subject = prefix + first_sentence
+    if len(subject) > MAX_SUBJECT_LENGTH:
+        cut = subject[:MAX_SUBJECT_LENGTH]
+        last_space = cut.rfind(" ")
+        subject = cut[:last_space] if last_space > len(prefix) else cut
+    return f"{subject.rstrip()}\n\n{text}\n\nBead: {bead_id}\n"
 
 
 def attempt_finish(ctx: Ctx, summary: str | None, blocked: str | None) -> Outcome:

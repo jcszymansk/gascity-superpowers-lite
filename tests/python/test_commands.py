@@ -12,6 +12,9 @@ from typing import Any
 
 import pytest
 
+from litetools import commands
+from litetools.ladder import Tier
+
 PACK = Path(__file__).resolve().parents[2]
 FAKE_GC = Path(__file__).resolve().parent / "fake_gc.py"
 ANCHOR, CONVOY, PARENT, ROOT = "st-1", "st-cv-1", "st-cv-0", "st-wf-1"
@@ -387,6 +390,20 @@ def test_attempt_commit_carries_the_bead_trailer_and_a_short_subject(world: Worl
     assert subject.startswith("st-1 (t1): x") and len(subject) == 72
     assert git(world.worktree, "log", "-1", "--format=%(trailers:key=Bead,valueonly)") == ANCHOR
     assert summary in git(world.worktree, "log", "-1", "--format=%b")
+
+
+@pytest.mark.parametrize(
+    ("summary", "subject"),
+    [
+        ("Fixed it. Then more detail.", "st-1 (t1): Fixed it"),
+        ("v1.2 parser fixed", "st-1 (t1): v1.2 parser fixed"),
+        ("word " * 30, "st-1 (t1): " + " ".join(["word"] * 12)),
+    ],
+)
+def test_attempt_subject_is_the_first_sentence_cut_at_a_word(summary: str, subject: str) -> None:
+    message = commands._attempt_message("st-1", Tier.T1, summary)
+    assert message.splitlines()[0] == subject
+    assert len(subject) <= 72
 
 
 def test_attempt_finish_needs_exactly_one_of_summary_or_blocked(world: World) -> None:
