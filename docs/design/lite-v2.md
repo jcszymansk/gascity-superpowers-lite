@@ -1,7 +1,7 @@
 # superpowers-lite v2: tiered delegation
 
-Status: proposed, 2026-11-06. Applies to superpowers-lite at `23a64c6`, superpowers at `390cac1a`,
-gc 1.5.1.
+Status: phase 1 closed 2026-11-07, phase 2 not started. Proposed 2026-11-06 against superpowers-lite
+at `23a64c6`, superpowers at `390cac1a`, gc 1.5.1.
 
 ## Goal
 
@@ -396,6 +396,11 @@ For the owner to review and file, kept in `gcexp/upstream-drafts/`:
 | 2 | lite-build: own planning and review agents, `decompose` emits cards, cross-family review | a lite-build run completes with only `lite-*` agents |
 | 3 | More kinds, chosen by escalation rate; calibration formula | each kind has an escalation rate from real runs |
 | 4 | Learnings step; discovery and design panels | |
+
+Phase 1 closed on 2026-11-07. A simpletracker convoy drained with T1 on Haiku, and the one real
+escalation (`smt-rl47`, T1 to T2) was recorded on the work bead and in its findings. The T3 gate and
+attempt ran only in the lab: forcing a real one needs a bead that both Haiku and Sonnet fail, and
+none has turned up. The first real T3 still stops at the gate for a human `approve`.
 
 ## Open questions
 
