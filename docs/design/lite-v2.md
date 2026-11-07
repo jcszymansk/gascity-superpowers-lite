@@ -463,9 +463,10 @@ Risks:
   67,854 tokens and 9 refusals in about 13 minutes. Both cards led Haiku to a T1 pass on all 36
   independent tests. At list prices Sonnet came out dearer, because its longer session re-read
   more cache, so `lite-plan` stays on Opus. The 8 KiB cap caused most of the refusals.
-- The per-item reviewer has rejected once, on a rule the card spelled out. An independent test of
-  36 cases found no behavioural fault in that attempt, so the reviewer's ability to catch a
-  behavioural bug is still unknown.
+- The per-item reviewer caught a real behavioural gap in a harness trial (2026-11-07): given the
+  historical solution, which fails 5 of the 36 independent tests, Haiku rejected 6 of 6 and named
+  the header and string-template faults each time, and it approved a good diff 3 of 3. That diff
+  was far from its card, though, so a subtle bug in a diff that follows the card is still untested.
 
 ## References
 
