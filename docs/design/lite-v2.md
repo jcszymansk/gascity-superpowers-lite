@@ -446,9 +446,16 @@ Risks:
 
 - The superpowers pin grows heavier with every override (see "Relation to superpowers").
 - Model choices stay opinion until the calibration cards exist, so phase 1 writes them.
-- No model has run a lite v2 step yet. The lab played every agent through the real commands; the
-  phase 1 done criterion (a simpletracker convoy drained with T1 on a cheap model) needs the
-  gcexp city.
+- Real runs cover T1 and T2 only (simpletracker, 2026-11-07). Three no-code items ran: two passed at
+  T1, and `smt-rl47` was rejected at T1 for missing docstrings and passed at T2. The T3 gate and a
+  T3 attempt have run only in the lab, with the agents played by hand.
+- Cards still carry the design. `smt-rl47`'s Steps spell out the lexer as prose (frame stack,
+  dollar-run rule, parse order), and `card-cutter` wrote 105,104 output tokens on Opus for that one
+  card against 74,475 for `executor-t1`. So these runs show that Haiku can implement a written
+  design, and the cutter stays the main expense.
+- The per-item reviewer has rejected once, on a rule the card spelled out. An independent test of
+  36 cases found no behavioural fault in that attempt, so the reviewer's ability to catch a
+  behavioural bug is still unknown.
 
 ## References
 
