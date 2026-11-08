@@ -21,8 +21,9 @@ A card holds no implementation. When cards carried code, the executor copied
 98% of its diff from them, so the expensive cutter did the work and a cheap
 executor's pass proved nothing. Only ``## Context`` and ``## Interfaces`` may
 hold fenced code: Context must quote lines that exist in the repository, and
-Interfaces is capped at what signatures need. Everything else the cutter
-writes shares a size cap small enough that a solution cannot fit in it.
+Interfaces is capped at what signatures need. Code written past these checks
+shows up afterwards in ``overlap``, which counts the attempt's lines that the
+card spelled out.
 """
 
 from __future__ import annotations
@@ -43,10 +44,10 @@ FENCE = "+++"
 MAX_FILES = 8
 MAX_DONE_WHEN = 8
 MAX_CARD_BYTES = 32 * 1024
-MAX_AUTHORED_BYTES = 8 * 1024
 MAX_INTERFACE_CODE_LINES = 40
 MAX_INLINE_CODE = 120
 MAX_REPORTED_LINES = 5
+MIN_OVERLAP_LINE_CHARS = 12
 CHECKLIST_HEADING = "Checklist"
 
 
@@ -162,14 +163,8 @@ def _split_code(text: str) -> tuple[list[str], list[str]]:
 def _code_rule_errors(sections: tuple[tuple[Section, str], ...]) -> list[str]:
     """Return every way the sections break the no-implementation rule."""
     errors: list[str] = []
-    authored_bytes = 0
     for section, text in sections:
-        if section is Section.CHECKLIST:
-            continue
         prose, code = _split_code(text)
-        authored_bytes += len("\n".join(prose).encode("utf-8"))
-        if section is not Section.CONTEXT:
-            authored_bytes += len("\n".join(code).encode("utf-8"))
         if section is Section.INTERFACES and len(code) > MAX_INTERFACE_CODE_LINES:
             errors.append(
                 f"'## Interfaces' has {len(code)} lines of code; the cap is "
@@ -184,12 +179,50 @@ def _code_rule_errors(sections: tuple[tuple[Section, str], ...]) -> list[str]:
             errors.append(f"{where} holds a line indented like code: describe the behaviour instead")
         if any(len(span) > MAX_INLINE_CODE for span in _INLINE_CODE.findall(text)):
             errors.append(f"{where} holds inline code over {MAX_INLINE_CODE} characters: describe it instead")
-    if authored_bytes > MAX_AUTHORED_BYTES:
-        errors.append(
-            f"the card has {authored_bytes} bytes outside quoted code; the cap is {MAX_AUTHORED_BYTES}: "
-            "cut any solution out of it, or split the task"
-        )
     return errors
+
+
+@dataclass(frozen=True, slots=True)
+class Overlap:
+    """How much of an attempt the card spelled out.
+
+    Attributes:
+        copied: Considered added lines that appear verbatim in the card.
+        considered: Added lines long enough to say something.
+    """
+
+    copied: int
+    considered: int
+
+    def __str__(self) -> str:
+        return f"{self.copied}/{self.considered}"
+
+
+def overlap(card: Card, added_lines: tuple[str, ...]) -> Overlap:
+    """Count the attempt's added lines that the card spelled out.
+
+    Lines shorter than ``MIN_OVERLAP_LINE_CHARS`` once stripped (braces,
+    ``return x``) say nothing about where the code came from, so they are not
+    considered. Code the card quotes in ``## Context`` exists in the
+    repository already, so a line matching only that is not counted as copied.
+
+    Args:
+        card: The sealed card the attempt worked from.
+        added_lines: The attempt's added lines, without the diff's ``+``.
+
+    Returns:
+        The copied and considered line counts.
+    """
+    written: set[str] = set()
+    for section, text in card.sections:
+        if section is Section.CHECKLIST:
+            continue
+        prose, code = _split_code(text)
+        written.update(line.strip() for line in prose)
+        if section is not Section.CONTEXT:
+            written.update(line.strip() for line in code)
+    considered = [line.strip() for line in added_lines if len(line.strip()) >= MIN_OVERLAP_LINE_CHARS]
+    return Overlap(sum(line in written for line in considered), len(considered))
 
 
 def unquoted_context_lines(card: Card, known_lines: frozenset[str]) -> list[str]:

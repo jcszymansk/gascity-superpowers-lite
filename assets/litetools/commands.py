@@ -626,6 +626,11 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
         saved = _write(layout.diff(tier), changes.value.full)
         if isinstance(saved, Err):
             return saved
+        shared = cards.overlap(card.value, checks.added_lines(changes.value.unified))
+        log.info("card overlap for %s %s: %s lines copied from the card", item.anchor.bead_id, tier.value, shared)
+        recorded = ctx.gc.set_metadata(item.anchor.bead_id, {f"lite.card_overlap.{tier.value}": str(shared)})
+        if isinstance(recorded, Err):
+            return recorded
         parsed = checks.parse_name_status(changes.value.name_status)
         if not parsed:
             results.append(checks.CheckResult("diff-scope", False, ("the attempt changed nothing",)))

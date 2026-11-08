@@ -98,6 +98,11 @@ def is_test_path(path: str) -> bool:
     return bool(_TEST_PATH.search(PurePosixPath(path).as_posix()))
 
 
+def added_lines(unified_diff: str) -> tuple[str, ...]:
+    """Return the lines a unified diff adds, without their ``+``."""
+    return tuple(line[1:] for line in unified_diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
+
+
 def tests_intact(changes: tuple[ChangedPath, ...], unified_diff: str) -> CheckResult:
     """Fail when the attempt deletes tests or adds skip markers.
 

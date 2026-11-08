@@ -219,9 +219,12 @@ Cards hold no implementation or test code. In the first real run (simpletracker,
 cards carried it: 305 of 311 and 378 of 386 added lines were verbatim in the card, and `card-cutter`
 on Opus wrote 82,264 output tokens against 37,926 for `executor-t1`. Haiku passed both items without
 having solved anything, and no escalation could happen. `cut-card-finish` now refuses code blocks
-outside `interfaces` and `context`, context lines that are not in the repository, and more than
-8 KiB outside quoted code. `card-cutter` runs on `lite-plan` in phase 1 for safety; moving it to a
-cheaper slot is a calibration question.
+outside `interfaces` and `context`, code-style indented lines, long inline code and context
+lines that are not in the repository. An 8 KiB limit on the rest of the card was dropped on
+2026-11-08: it caused most refusals, and prose pseudocode passed it anyway. Verify records
+`lite.card_overlap.<tier>` instead, the share of the attempt's added lines found verbatim in
+the card, which shows copied code however the card wrote it. `card-cutter` runs on `lite-plan`
+in phase 1 for safety; moving it to a cheaper slot is a calibration question.
 
 This conflicts with phase 2's mechanical cutting: a superpowers plan holds complete code in every
 step, and pasting it into a card would bring the same problem back. Phase 2 has to choose between
@@ -467,7 +470,7 @@ Risks:
   Opus cut that card with 40,989 output tokens and 1 refusal in about 6 minutes, Sonnet 5 with
   67,854 tokens and 9 refusals in about 13 minutes. Both cards led Haiku to a T1 pass on all 36
   independent tests. At list prices Sonnet came out dearer, because its longer session re-read
-  more cache, so `lite-plan` stays on Opus. The 8 KiB cap caused most of the refusals.
+  more cache, so `lite-plan` stays on Opus. The 8 KiB cap caused most of the refusals and was dropped.
 - The per-item reviewer caught a real behavioural gap in a harness trial (2026-11-07): given the
   historical solution, which fails 5 of the 36 independent tests, Haiku rejected 6 of 6 and named
   the header and string-template faults each time, and it approved a good diff 3 of 3. That diff

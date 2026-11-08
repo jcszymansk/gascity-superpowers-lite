@@ -422,6 +422,7 @@ def test_clean_t1_attempt_passes_checks_and_approval_lands(world: World) -> None
     assert result.returncode == 0, result.stderr
     assert "Every check passed" in result.stdout
     assert world.meta("s-ver-t1")["lite.checks"] == "passed"
+    assert world.meta(ANCHOR)["lite.card_overlap.t1"] == "0/0"
     assert (world.artifacts / "attempts" / "t1" / "attempt.diff").read_text().count("+fixed") == 1
     approved = world.run("verdict", "approve")
     assert approved.returncode == 0, approved.stderr
@@ -429,6 +430,14 @@ def test_clean_t1_attempt_passes_checks_and_approval_lands(world: World) -> None
     assert world.meta("s-ver-t1")["gc.outcome"] == "pass"
     assert world.meta(ANCHOR)["lite.passed_tier"] == "t1"
     assert world.meta(ANCHOR)["lite.attempt.t1"] == "approved"
+
+
+def test_verify_records_lines_copied_from_the_card(world: World) -> None:
+    sealed(world, CARD.replace("1. Replace broken with fixed.", "1. Replace broken with fixed.\n2. Add this line after it:\n\nthe app is fixed now"))
+    attempted(world, "t1", "fixed\nthe app is fixed now\nsomething the executor wrote\n")
+    result = verified(world, "t1")
+    assert result.returncode == 0, result.stderr
+    assert world.meta(ANCHOR)["lite.card_overlap.t1"] == "1/2"
 
 
 def test_verdict_needs_passing_checks_and_a_reason_to_reject(world: World) -> None:

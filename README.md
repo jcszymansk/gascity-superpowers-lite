@@ -96,7 +96,7 @@ Each bead becomes one item, run by the pack's own agents, each step in a fresh s
    code it depends on, numbered steps, and `done_when` commands that pass only when the work is
    done. A card holds no implementation or test code. The validator allows code blocks only in
    `## Interfaces` (up to 40 lines of signatures) and `## Context`, whose lines must exist in the
-   repository, and it caps everything else at 8 KiB. The checklist for the card's kind (`bugfix`
+   repository. The checklist for the card's kind (`bugfix`
    or `tdd-feature`, from `assets/kinds/`) is then pasted in. `cut-card-start` prints a worked
    example card (`assets/templates/card-example.md`), and the step text keeps the cutter to the
    bead and the worktree at `HEAD`, because cutters otherwise go looking for earlier cards and
@@ -120,7 +120,8 @@ that share a target must be ordered with `blocks` edges (`gc bd dep add <later> 
 blocks`); beads with their own `lite/<id>` targets need no ordering.
 
 The work bead records the outcome: `lite.kind`, one `lite.attempt.<tier>` entry per attempt
-(`approved` or the check or review finding that rejected it), `lite.passed_tier`, and
+(`approved` or the check or review finding that rejected it), `lite.passed_tier`, `lite.card_overlap.<tier>` (how many of the attempt's added lines of 12
+or more characters appear verbatim in the card, such as `4/333`), and
 `lite.result` (`landed`, `blocked`, `uncuttable` or `land-refused`). Cards, reports, diffs and
 findings are kept under `$GC_CITY/.gc/artifacts/<rig>/superpowers-lite/<bead>/`.
 

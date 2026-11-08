@@ -104,3 +104,9 @@ def test_card_done_truncates_long_output(tmp_path: Path) -> None:
     result = checks.card_done(("yes x | head -c 20000; exit 1",), tmp_path, timeout_seconds=10)
     assert len(result.details[0]) < checks.OUTPUT_LIMIT + 200
     assert "…" in result.details[0]
+
+
+def test_added_lines_skip_headers_and_keep_content() -> None:
+    diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1,2 @@\n-old\n+new line\n+\n+++not a header\n"
+    assert checks.added_lines(diff) == ("new line", "")
+    assert checks.added_lines("") == ()

@@ -225,18 +225,42 @@ def test_interface_code_cap_is_exact() -> None:
     assert any("'## Interfaces' has 41 lines of code" in error for error in errors)
 
 
-def test_authored_cap_counts_prose_and_interface_code_but_not_quoted_context() -> None:
-    quoted = "```\n" + "line\n" * 4000 + "```"
-    assert isinstance(card.parse(cutter_card(body=body_with("Context", quoted)), require_checklist=False), Ok)
-
-    for section, text in (("Steps", "word " * 2000), ("Context", "word " * 2000), ("Interfaces", "```\n" + "x" * 9000 + "\n```")):
-        errors = errors_of(card.parse(cutter_card(body=body_with(section, text)), require_checklist=False))
-        assert any("bytes outside quoted code" in error for error in errors), section
+def test_long_cards_have_no_size_cap_outside_the_whole_card_limit() -> None:
+    for section, text in (("Steps", "word " * 4000), ("Context", "word " * 4000)):
+        assert isinstance(card.parse(cutter_card(body=body_with(section, text)), require_checklist=False), Ok), section
 
 
-def test_a_sealed_checklist_does_not_count_against_the_authored_cap() -> None:
-    sealed = card.seal(cutter_card(), "- check\n" * 2000)
-    assert isinstance(sealed, Ok), sealed
+def sealed_card(body: str) -> card.Card:
+    parsed = card.parse(cutter_card(body=body), require_checklist=False)
+    assert isinstance(parsed, Ok), parsed
+    return parsed.value
+
+
+def test_overlap_counts_added_lines_the_card_wrote() -> None:
+    written = sealed_card(body_with("Steps", "Call it like this:\n\n`val path = buildPath(first)` once."))
+    plain = sealed_card(body_with("Steps", "val path = buildPath(first)"))
+    added = ("val path = buildPath(first)", "  val other = somethingElse()  ")
+    assert card.overlap(written, added) == card.Overlap(0, 2)
+    assert card.overlap(plain, added) == card.Overlap(1, 2)
+
+
+def test_overlap_counts_interface_code_but_not_quoted_context() -> None:
+    interfaces = sealed_card(body_with("Interfaces", "```\nfun encode(entries: List<Entry>): String\n```"))
+    context = sealed_card(body_with("Context", "```\nfun encode(entries: List<Entry>): String\n```"))
+    added = ("    fun encode(entries: List<Entry>): String",)
+    assert card.overlap(interfaces, added) == card.Overlap(1, 1)
+    assert card.overlap(context, added) == card.Overlap(0, 1)
+
+
+def test_overlap_ignores_short_lines_and_the_checklist() -> None:
+    short = "x" * (card.MIN_OVERLAP_LINE_CHARS - 1)
+    exact = "y" * card.MIN_OVERLAP_LINE_CHARS
+    sealed = card.seal(cutter_card(body=body_with("Steps", f"{short}\n{exact}")), "- run every done_when command")
+    assert isinstance(sealed, Ok)
+    parsed = card.parse(sealed.value, require_checklist=True)
+    assert isinstance(parsed, Ok)
+    assert card.overlap(parsed.value, (short, exact, "- run every done_when command")) == card.Overlap(1, 2)
+    assert str(card.Overlap(1, 2)) == "1/2"
 
 
 def parsed_with_context(text: str) -> card.Card:
