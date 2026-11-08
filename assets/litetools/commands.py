@@ -316,6 +316,9 @@ def cut_card_start(ctx: Ctx) -> Outcome:
     template = _read(ctx.env.pack_dir / "assets" / "templates" / "card.md")
     if isinstance(template, Err):
         return template
+    example = _read(ctx.env.pack_dir / "assets" / "templates" / "card-example.md")
+    if isinstance(example, Err):
+        return example
     layout = _layout(ctx, item)
     kinds = ", ".join(kind.value for kind in cards.Kind)
     return Ok(
@@ -333,6 +336,10 @@ def cut_card_start(ctx: Ctx) -> Outcome:
                     "Card template:",
                     "",
                     template.value.replace("{id}", item.anchor.bead_id).strip(),
+                    "",
+                    "Example card, from another project. Copy its shape and level of detail, not its content:",
+                    "",
+                    example.value.strip(),
                 ]
             )
         )

@@ -289,6 +289,7 @@ def test_cut_card_start_prints_the_bead_and_template(world: World) -> None:
     assert "fix the app" in result.stdout and "It prints broken." in result.stdout
     assert str(world.artifacts / "card.draft.md") in result.stdout
     assert 'id = "st-1"' in result.stdout
+    assert "Example card, from another project" in result.stdout and 'id = "ex-41"' in result.stdout
 
 
 def test_cut_card_finish_lists_every_error_and_keeps_the_step_open(world: World) -> None:

@@ -266,6 +266,12 @@ def test_only_the_first_missing_context_lines_are_shown() -> None:
     assert f"line{card.MAX_REPORTED_LINES - 1}" in errors[0] and f"line{card.MAX_REPORTED_LINES}" not in errors[0]
 
 
+def test_the_example_card_seals() -> None:
+    text = (PACK / "assets" / "templates" / "card-example.md").read_text(encoding="utf-8")
+    checklist = (PACK / "assets" / "kinds" / "bugfix.md").read_text(encoding="utf-8")
+    assert isinstance(card.seal(text, checklist), Ok)
+
+
 def test_the_template_obeys_the_rule() -> None:
     text = (PACK / "assets" / "templates" / "card.md").read_text(encoding="utf-8")
     body = text.split("+++", 2)[2]

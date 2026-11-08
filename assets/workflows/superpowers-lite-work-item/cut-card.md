@@ -2,9 +2,13 @@ Turn the work bead into one task card. Run:
 
     gc superpowers-lite cut-card-start
 
-It prints the work bead, the worktree, where to write the card and the card
-template. Read the code the bead concerns in the worktree; change nothing
-there. Then write the card to the printed path:
+It prints the work bead, the worktree, where to write the card, the card
+template and an example card. Read the code the bead concerns in the worktree;
+change nothing there. Work only from the bead and the worktree as it is at
+HEAD: do not open other worktrees, other items' artifacts or cards, other
+branches, or history beyond HEAD. An earlier card or a solution elsewhere is
+not your input, and the printed example is the only card you need. Then write
+the card to the printed path:
 
 - `kind`: `bugfix` when the bead reports wrong behaviour, `tdd-feature` when it
   asks for new behaviour.

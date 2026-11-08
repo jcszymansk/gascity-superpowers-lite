@@ -97,7 +97,10 @@ Each bead becomes one item, run by the pack's own agents, each step in a fresh s
    done. A card holds no implementation or test code. The validator allows code blocks only in
    `## Interfaces` (up to 40 lines of signatures) and `## Context`, whose lines must exist in the
    repository, and it caps everything else at 8 KiB. The checklist for the card's kind (`bugfix`
-   or `tdd-feature`, from `assets/kinds/`) is then pasted in.
+   or `tdd-feature`, from `assets/kinds/`) is then pasted in. `cut-card-start` prints a worked
+   example card (`assets/templates/card-example.md`), and the step text keeps the cutter to the
+   bead and the worktree at `HEAD`, because cutters otherwise go looking for earlier cards and
+   solutions on disk.
 3. `executor-t1` does the card in the worktree. The pack command it finishes with commits the work,
    with a `Bead: <id>` trailer.
 4. `card-reviewer` runs the checks, then reviews the diff against the card. The checks fail an
