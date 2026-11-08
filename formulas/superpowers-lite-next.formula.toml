@@ -1,7 +1,8 @@
 description = """
 What follows a verified attempt, bonded by the verify step's on_complete with
-`action` set to t2, t3 or land:
+`action` set to t1, t2, t3 or land and `round` to the attempt's round:
 
+  t1    the T1 retry: attempt + verify, which bonds this formula again
   t2    attempt + verify, which bonds this formula again
   t3    human gate, approval, attempt + verify, which bonds this formula again
   land  land + close the work bead
@@ -20,8 +21,12 @@ description = "The work bead the item serves."
 required = true
 
 [vars.action]
-description = "t2, t3 or land."
+description = "t1, t2, t3 or land."
 required = true
+
+[vars.round]
+description = "The attempt's round at its tier: 1 for a first attempt, 2 for a retry."
+default = "1"
 
 # Nothing watches human gates: verify mails `human`, who runs
 # `gc superpowers-lite approve <work bead>` to close this gate.
@@ -40,7 +45,7 @@ id = "{target}.attempt"
 title = "{action} attempt for {issue}"
 condition = "{{action}} != land"
 needs = ["{target}.approve"]
-metadata = { "gc.run_target" = "superpowers-lite.executor-{action}", "lite.step" = "attempt", "lite.tier" = "{action}" }
+metadata = { "gc.run_target" = "superpowers-lite.executor-{action}", "lite.step" = "attempt", "lite.tier" = "{action}", "lite.round" = "{round}" }
 description_file = "../assets/workflows/superpowers-lite-work-item/attempt.md"
 
 [[template]]
@@ -48,13 +53,13 @@ id = "{target}.verify"
 title = "Verify the {action} attempt for {issue}"
 condition = "{{action}} != land"
 needs = ["{target}.attempt"]
-metadata = { "gc.run_target" = "superpowers-lite.card-reviewer", "lite.step" = "verify", "lite.tier" = "{action}" }
+metadata = { "gc.run_target" = "superpowers-lite.card-reviewer", "lite.step" = "verify", "lite.tier" = "{action}", "lite.round" = "{round}" }
 description_file = "../assets/workflows/superpowers-lite-work-item/verify.md"
 
 [template.on_complete]
 for_each = "output.next"
 bond = "superpowers-lite-next"
-vars = { action = "{item.action}", issue = "{issue}" }
+vars = { action = "{item.action}", round = "{item.round}", issue = "{issue}" }
 sequential = true
 
 [[template]]

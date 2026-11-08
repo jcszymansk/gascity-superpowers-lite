@@ -106,8 +106,11 @@ Each bead becomes one item, run by the pack's own agents, each step in a fresh s
 4. `card-reviewer` runs the checks, then reviews the diff against the card. The checks fail an
    attempt that leaves uncommitted changes, changes nothing, touches a file outside the card,
    deletes or skips a test, or fails a `done_when` command.
-5. An approved attempt lands. A rejected one escalates: the worktree is reset to its base and
-   `executor-t2` gets the card plus the findings and diff of the failed attempt. A rejected T2
+5. An approved attempt lands. A rejected T1 attempt is retried once by `executor-t1`, starting
+   from the rejected attempt with its findings, because most T1 rejections need a small fix, not
+   a stronger model. An attempt whose executor reported a blocker skips the retry. A rejected
+   retry escalates: the worktree is reset to its base and `executor-t2` gets the card plus the
+   findings and diff of the failed attempt. A rejected T2
    attempt mails `human` and waits for approval of a T3 attempt (see "Approving a T3 attempt").
    A rejected T3 attempt fails the item.
 6. `operator` lands the attempt on the item's target branch and closes the bead.
@@ -119,9 +122,10 @@ and refuses when the target moved since the item started. A drain runs its items
 that share a target must be ordered with `blocks` edges (`gc bd dep add <later> <earlier> --type
 blocks`); beads with their own `lite/<id>` targets need no ordering.
 
-The work bead records the outcome: `lite.kind`, one `lite.attempt.<tier>` entry per attempt
-(`approved` or the check or review finding that rejected it), `lite.passed_tier`, `lite.card_overlap.<tier>` (how many of the attempt's added lines of 12
-or more characters appear verbatim in the card, such as `4/333`), and
+The work bead records the outcome: `lite.kind`, one `lite.attempt.<attempt>` entry per attempt
+(`t1`, the retry `t1.2`, `t2`, `t3`; `approved` or the check or review finding that rejected
+it), `lite.last_rejected`, `lite.passed_tier`, `lite.card_overlap.<attempt>` (how many of the
+attempt's added lines of 12 or more characters appear verbatim in the card, such as `4/333`), and
 `lite.result` (`landed`, `blocked`, `uncuttable` or `land-refused`). Cards, reports, diffs and
 findings are kept under `$GC_CITY/.gc/artifacts/<rig>/superpowers-lite/<bead>/`.
 

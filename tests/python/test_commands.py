@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from litetools import commands
-from litetools.ladder import Tier
+from litetools.ladder import Tier, first_attempt
 
 PACK = Path(__file__).resolve().parents[2]
 FAKE_GC = Path(__file__).resolve().parent / "fake_gc.py"
@@ -79,11 +79,13 @@ class World:
         meta: dict[str, str] = self.bead(bead_id).get("metadata", {})
         return meta
 
-    def add_step(self, bead_id: str, step: str, tier: str = "", issue_type: str = "task") -> None:
+    def add_step(self, bead_id: str, step: str, tier: str = "", issue_type: str = "task", round_: str = "") -> None:
         state = self.state
         meta = {"gc.root_bead_id": ROOT, "lite.step": step}
         if tier:
             meta["lite.tier"] = tier
+        if round_:
+            meta["lite.round"] = round_
         state["beads"][bead_id] = {"id": bead_id, "status": "open", "title": f"{step} {tier}", "description": f"Run `gc superpowers-lite {step}`.", "assignee": "", "issue_type": issue_type, "metadata": meta}
         state["claim_queue"] = [bead_id]
         self.save(state)
@@ -103,8 +105,8 @@ class World:
         }
         return subprocess.run([sys.executable, str(PACK / "assets" / "lite.py"), *args], env={**base, **(env or {})}, capture_output=True, text=True, check=False)
 
-    def claim_and_run(self, bead_id: str, step: str, *args: str, tier: str = "") -> subprocess.CompletedProcess[str]:
-        self.add_step(bead_id, step, tier)
+    def claim_and_run(self, bead_id: str, step: str, *args: str, tier: str = "", round_: str = "") -> subprocess.CompletedProcess[str]:
+        self.add_step(bead_id, step, tier, round_=round_)
         claimed = self.run("claim")
         assert claimed.returncode == 0, claimed.stderr
         return self.run(*args)
@@ -159,8 +161,8 @@ def sealed(world: World, card: str = CARD) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def attempted(world: World, tier: str, content: str, extra: dict[str, str] | None = None) -> None:
-    started = world.claim_and_run(f"s-att-{tier}", "attempt", "attempt-start", tier=tier)
+def attempted(world: World, tier: str, content: str, extra: dict[str, str] | None = None, round_: str = "") -> None:
+    started = world.claim_and_run(f"s-att-{tier}{round_}", "attempt", "attempt-start", tier=tier, round_=round_)
     assert started.returncode == 0, started.stderr
     (world.worktree / "src" / "app.txt").write_text(content)
     for name, text in (extra or {}).items():
@@ -170,8 +172,8 @@ def attempted(world: World, tier: str, content: str, extra: dict[str, str] | Non
     assert finished.returncode == 0, finished.stderr
 
 
-def verified(world: World, tier: str) -> subprocess.CompletedProcess[str]:
-    return world.claim_and_run(f"s-ver-{tier}", "verify", "verify", tier=tier)
+def verified(world: World, tier: str, round_: str = "") -> subprocess.CompletedProcess[str]:
+    return world.claim_and_run(f"s-ver-{tier}{round_}", "verify", "verify", tier=tier, round_=round_)
 
 
 def output(world: World, step: str) -> Any:
@@ -402,7 +404,7 @@ def test_attempt_commit_carries_the_bead_trailer_and_a_short_subject(world: Worl
     ],
 )
 def test_attempt_subject_is_the_first_sentence_cut_at_a_word(summary: str, subject: str) -> None:
-    message = commands._attempt_message("st-1", Tier.T1, summary)
+    message = commands._attempt_message("st-1", first_attempt(Tier.T1), summary)
     assert message.splitlines()[0] == subject
     assert len(subject) <= 72
 
@@ -426,7 +428,7 @@ def test_clean_t1_attempt_passes_checks_and_approval_lands(world: World) -> None
     assert (world.artifacts / "attempts" / "t1" / "attempt.diff").read_text().count("+fixed") == 1
     approved = world.run("verdict", "approve")
     assert approved.returncode == 0, approved.stderr
-    assert output(world, "s-ver-t1") == {"next": [{"action": "land"}]}
+    assert output(world, "s-ver-t1") == {"next": [{"action": "land", "round": "1"}]}
     assert world.meta("s-ver-t1")["gc.outcome"] == "pass"
     assert world.meta(ANCHOR)["lite.passed_tier"] == "t1"
     assert world.meta(ANCHOR)["lite.attempt.t1"] == "approved"
@@ -452,12 +454,13 @@ def test_verdict_needs_passing_checks_and_a_reason_to_reject(world: World) -> No
     assert no_reason.returncode == 1 and "needs --reason" in no_reason.stderr
 
 
-def test_failed_checks_escalate_to_t2_without_review(world: World) -> None:
+def test_failed_checks_retry_t1_without_review(world: World) -> None:
     sealed(world)
     attempted(world, "t1", "still broken\n", extra={"src/other.txt": "x\n"})
     result = verified(world, "t1")
     assert result.returncode == 0, result.stderr
-    assert output(world, "s-ver-t1") == {"next": [{"action": "t2"}]}
+    assert output(world, "s-ver-t1") == {"next": [{"action": "t1", "round": "2"}]}
+    assert world.meta(ANCHOR)["lite.last_rejected"] == "t1"
     findings = (world.artifacts / "attempts" / "t1" / "findings.md").read_text()
     assert "## diff-scope" in findings and "src/other.txt" in findings
     assert "## card-done" in findings
@@ -478,7 +481,7 @@ def test_an_attempt_that_changes_nothing_is_rejected(world: World) -> None:
     sealed(world)
     attempted(world, "t1", "broken\n")
     assert verified(world, "t1").returncode == 0
-    assert output(world, "s-ver-t1") == {"next": [{"action": "t2"}]}
+    assert output(world, "s-ver-t1") == {"next": [{"action": "t1", "round": "2"}]}
 
 
 def test_a_blocked_attempt_escalates(world: World) -> None:
@@ -488,12 +491,70 @@ def test_a_blocked_attempt_escalates(world: World) -> None:
     assert verified(world, "t1").returncode == 0
     findings = (world.artifacts / "attempts" / "t1" / "findings.md").read_text()
     assert "the file is generated" in findings
-    assert output(world, "s-ver-t1") == {"next": [{"action": "t2"}]}
+    assert output(world, "s-ver-t1") == {"next": [{"action": "t2", "round": "1"}]}
+
+
+def test_t1_retry_starts_from_the_rejected_attempt_and_sees_its_findings(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "fixed\n", extra={"src/other.txt": "x\n"})
+    assert verified(world, "t1").returncode == 0
+    rejected = world.meta("s-att-t1")["lite.attempt_commit"]
+    started = world.claim_and_run("s-att-t1-2", "attempt", "attempt-start", tier="t1", round_="2")
+    assert started.returncode == 0, started.stderr
+    assert git(world.worktree, "rev-parse", "HEAD") == rejected
+    assert (world.worktree / "src" / "other.txt").exists()
+    assert "Attempt T1.2" in started.stdout and "This is a retry" in started.stdout
+    assert str(world.artifacts / "attempts" / "t1" / "findings.md") in started.stdout
+
+
+def test_an_approved_retry_lands_with_both_attempts_recorded(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "still broken\n")
+    assert verified(world, "t1").returncode == 0
+    attempted(world, "t1", "fixed\n", round_="2")
+    result = verified(world, "t1", "2")
+    assert result.returncode == 0, result.stderr
+    assert "Every check passed for the t1.2 attempt" in result.stdout
+    assert world.run("verdict", "approve").returncode == 0
+    assert output(world, "s-ver-t12") == {"next": [{"action": "land", "round": "1"}]}
+    meta = world.meta(ANCHOR)
+    assert meta["lite.attempt.t1"].startswith("rejected: failed checks: card-done")
+    assert meta["lite.attempt.t1.2"] == "approved" and meta["lite.passed_tier"] == "t1"
+    assert "lite.card_overlap.t1.2" in meta
+    assert (world.artifacts / "attempts" / "t1.2" / "report.md").exists()
+    assert git(world.worktree, "log", "-1", "--format=%s").startswith("st-1 (t1.2): ")
+
+
+def test_a_rejected_retry_escalates_to_t2_from_the_base(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "still broken\n")
+    assert verified(world, "t1").returncode == 0
+    attempted(world, "t1", "still broken, again\n", round_="2")
+    assert verified(world, "t1", "2").returncode == 0
+    assert output(world, "s-ver-t12") == {"next": [{"action": "t2", "round": "1"}]}
+    assert world.meta(ANCHOR)["lite.last_rejected"] == "t1.2"
+    started = world.claim_and_run("s-att-t2", "attempt", "attempt-start", tier="t2")
+    assert started.returncode == 0, started.stderr
+    assert git(world.worktree, "rev-parse", "HEAD") == world.meta(ANCHOR)["lite.base_commit"]
+    assert str(world.artifacts / "attempts" / "t1.2" / "findings.md") in started.stdout
+
+
+def test_a_retry_with_no_rejected_attempt_is_refused(world: World) -> None:
+    sealed(world)
+    started = world.claim_and_run("s-att-t1-2", "attempt", "attempt-start", tier="t1", round_="2")
+    assert started.returncode == 1 and "needs a rejected t1 attempt" in started.stderr
+
+
+def test_a_round_past_the_retries_is_refused(world: World) -> None:
+    sealed(world)
+    started = world.claim_and_run("s-att-t1-3", "attempt", "attempt-start", tier="t1", round_="3")
+    assert started.returncode == 1 and "past the 1 retries" in started.stderr
 
 
 def test_t2_starts_from_the_base_and_sees_t1_findings(world: World) -> None:
     sealed(world)
-    attempted(world, "t1", "still broken\n")
+    world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
+    assert world.run("attempt-finish", "--blocked", "the file is generated").returncode == 0
     assert verified(world, "t1").returncode == 0
     (world.worktree / "build").mkdir()
     (world.worktree / "build" / "cache").write_text("keep")
@@ -512,7 +573,7 @@ def test_review_rejection_at_t2_asks_a_human_for_t3(world: World) -> None:
     assert verified(world, "t2").returncode == 0
     result = world.run("verdict", "reject", "--reason", "src/app.txt:1 wrong casing")
     assert result.returncode == 0, result.stderr
-    assert output(world, "s-ver-t2") == {"next": [{"action": "t3"}]}
+    assert output(world, "s-ver-t2") == {"next": [{"action": "t3", "round": "1"}]}
     mail = world.state["mail"]
     assert len(mail) == 1 and mail[0]["to"] == "human"
     assert "gc superpowers-lite approve --rig st st-1" in mail[0]["body"]

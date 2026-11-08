@@ -63,11 +63,22 @@ def test_step_kinds_match_the_commands_that_check_them() -> None:
     assert used == expected == set(STEP_COMMANDS)
 
 
-def test_tiered_steps_carry_their_tier() -> None:
+def test_tiered_steps_carry_their_tier_and_round() -> None:
     for name in V2_FORMULAS[1:]:
         for step in _steps(name):
             if step["metadata"]["lite.step"] in {"attempt", "verify"}:
                 assert step["metadata"]["lite.tier"] in {"t1", "{action}"}, step["id"]
+                if step["metadata"]["lite.tier"] == "{action}":
+                    assert step["metadata"]["lite.round"] == "{round}", step["id"]
+
+
+def test_every_verify_bond_passes_action_and_round() -> None:
+    bonds = [step["on_complete"] for name in V2_FORMULAS[1:] for step in _steps(name) if "on_complete" in step]
+    assert len(bonds) == 2
+    for bond in bonds:
+        assert bond["bond"] == "superpowers-lite-next" and bond["for_each"] == "output.next"
+        assert bond["vars"]["action"] == "{item.action}" and bond["vars"]["round"] == "{item.round}"
+    assert _toml(PACK / "formulas" / "superpowers-lite-next.formula.toml")["vars"]["round"]["default"] == "1"
 
 
 def test_every_command_has_a_runner_and_a_cli_subcommand() -> None:

@@ -43,5 +43,5 @@ description_file = "../assets/workflows/superpowers-lite-work-item/verify.md"
 [steps.on_complete]
 for_each = "output.next"
 bond = "superpowers-lite-next"
-vars = { action = "{item.action}", issue = "{{issue}}" }
+vars = { action = "{item.action}", round = "{item.round}", issue = "{{issue}}" }
 sequential = true

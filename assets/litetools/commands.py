@@ -26,10 +26,10 @@ from litetools.context import (
     layout_for,
     resolve_item,
     save_claim,
-    step_tier,
+    step_attempt,
 )
 from litetools.gc import Bead, Gc
-from litetools.ladder import Action, Decision, Tier, Verdict, decide
+from litetools.ladder import Action, Attempt, Decision, Tier, Verdict, decide, parse_attempt
 from litetools.result import Err, Ok, Result
 
 log = logging.getLogger(__name__)
@@ -415,20 +415,47 @@ def cut_card_finish(ctx: Ctx, blocked: str | None) -> Outcome:
 
 # --- attempt -----------------------------------------------------------------
 
-_LOWER = {Tier.T2: Tier.T1, Tier.T3: Tier.T2}
 MAX_SUBJECT_LENGTH = 72
 
 
+def _rejected_attempt(item: Item) -> Result[Attempt | None, str]:
+    """Return the item's last rejected attempt, or None before the first rejection."""
+    key = item.anchor.meta("lite.last_rejected")
+    if not key:
+        return Ok(None)
+    parsed = parse_attempt(key)
+    return parsed if isinstance(parsed, Err) else Ok(parsed.value)
+
+
+def _start_commit(layout: Layout, attempt: Attempt, previous: Attempt | None, base: str) -> Result[str, str]:
+    """Return the commit an attempt starts from: the rejected attempt for a retry, else the base."""
+    if attempt.round == 1:
+        return Ok(base)
+    if previous is None or previous.tier is not attempt.tier or previous.round != attempt.round - 1:
+        return Err(f"retry {attempt.key} needs a rejected {attempt.tier.value} attempt before it, got {previous}")
+    text = _read(layout.report(previous))
+    if isinstance(text, Err):
+        return text
+    report = reports.parse(text.value)
+    if isinstance(report, Err):
+        return Err(f"the report of {previous.key} is invalid: {report.error}")
+    return Ok(report.value.commit or base)
+
+
 def attempt_start(ctx: Ctx) -> Outcome:
-    """Reset the worktree to the item's base and print the card and prior findings."""
+    """Prepare the worktree and print the card and the last rejection's findings.
+
+    A first attempt at a tier starts from the item's base; a retry starts from
+    the attempt it retries.
+    """
     found = _claimed_step(ctx, "attempt")
     if isinstance(found, Err):
         return found
     item = found.value
-    tier_result = step_tier(item.step)
-    if isinstance(tier_result, Err):
-        return tier_result
-    tier = tier_result.value
+    attempt_result = step_attempt(item.step)
+    if isinstance(attempt_result, Err):
+        return attempt_result
+    attempt = attempt_result.value
     workdir = _workdir(item)
     if isinstance(workdir, Err):
         return workdir
@@ -438,23 +465,35 @@ def attempt_start(ctx: Ctx) -> Outcome:
     card = _sealed_card(ctx, item)
     if isinstance(card, Err):
         return card
-    reset = gitops.reset_to(workdir.value, base)
+    layout = _layout(ctx, item)
+    previous = _rejected_attempt(item)
+    if isinstance(previous, Err):
+        return previous
+    start = _start_commit(layout, attempt, previous.value, base)
+    if isinstance(start, Err):
+        return start
+    reset = gitops.reset_to(workdir.value, start.value)
     if isinstance(reset, Err):
         return reset
-    layout = _layout(ctx, item)
     lines = [
-        f"Attempt {tier.value.upper()} for {item.anchor.bead_id}.",
+        f"Attempt {attempt.key.upper()} for {item.anchor.bead_id}.",
         f"Worktree (work only here): {workdir.value}",
         f"Card (your whole task): {layout.card}",
         f"Files you may change: {', '.join(card.value.files)}",
     ]
-    lower = _LOWER.get(tier)
-    if lower is not None:
+    if attempt.round > 1 and previous.value is not None:
         lines += [
             "",
-            f"A {lower.value.upper()} attempt was rejected. The worktree is reset to the base commit.",
-            f"Why it was rejected: {layout.findings(lower)}",
-            f"Its diff, for reference only: {layout.diff(lower)}",
+            f"This is a retry. Your {previous.value.key} attempt was rejected, and the worktree holds it",
+            f"(commit {start.value[:12]}). Read why: {layout.findings(previous.value)}",
+            "Fix what the findings name and keep what already works; do not start over.",
+        ]
+    elif previous.value is not None:
+        lines += [
+            "",
+            f"A {previous.value.key} attempt was rejected. The worktree is reset to the base commit.",
+            f"Why it was rejected: {layout.findings(previous.value)}",
+            f"Its diff, for reference only: {layout.diff(previous.value)}",
             "Do not reapply that diff blindly; fix what the findings name.",
         ]
     lines += [
@@ -468,7 +507,7 @@ def attempt_start(ctx: Ctx) -> Outcome:
     return Ok(Done("\n".join(lines)))
 
 
-def _attempt_message(bead_id: str, tier: Tier, summary: str) -> str:
+def _attempt_message(bead_id: str, attempt: Attempt, summary: str) -> str:
     """Build an attempt's commit message: a subject of at most 72 characters, the summary, the trailer.
 
     The ``Bead:`` trailer ties the code to the task's evidence, so it must sit
@@ -476,7 +515,7 @@ def _attempt_message(bead_id: str, tier: Tier, summary: str) -> str:
     """
     text = summary.strip()
     first_sentence = re.split(r"(?<=[.!?])\s", text.splitlines()[0], maxsplit=1)[0].rstrip(".!?")
-    prefix = f"{bead_id} ({tier.value}): "
+    prefix = f"{bead_id} ({attempt.key}): "
     subject = prefix + first_sentence
     if len(subject) > MAX_SUBJECT_LENGTH:
         cut = subject[:MAX_SUBJECT_LENGTH]
@@ -496,27 +535,27 @@ def attempt_finish(ctx: Ctx, summary: str | None, blocked: str | None) -> Outcom
     if isinstance(found, Err):
         return found
     item = found.value
-    tier_result = step_tier(item.step)
-    if isinstance(tier_result, Err):
-        return tier_result
-    tier = tier_result.value
+    attempt_result = step_attempt(item.step)
+    if isinstance(attempt_result, Err):
+        return attempt_result
+    attempt = attempt_result.value
     workdir = _workdir(item)
     if isinstance(workdir, Err):
         return workdir
     status = reports.Status.DONE if summary is not None else reports.Status.BLOCKED
     commit = ""
     if status is reports.Status.DONE:
-        made = gitops.commit_all(workdir.value, _attempt_message(item.anchor.bead_id, tier, text))
+        made = gitops.commit_all(workdir.value, _attempt_message(item.anchor.bead_id, attempt, text))
         if isinstance(made, Err):
             return made
         commit = made.value or ""
     layout = _layout(ctx, item)
-    rendered = reports.render(reports.Report(item.anchor.bead_id, tier, status, commit, text))
-    written = _write(layout.report(tier), rendered)
+    rendered = reports.render(reports.Report(item.anchor.bead_id, attempt.tier, status, commit, text))
+    written = _write(layout.report(attempt), rendered)
     if isinstance(written, Err):
         return written
     closed = _close_step(
-        ctx, item.step, "pass", f"{tier.value} attempt {status.value}",
+        ctx, item.step, "pass", f"{attempt.key} attempt {status.value}",
         {"lite.attempt_status": status.value, "lite.attempt_commit": commit},
     )
     return closed if isinstance(closed, Err) else Ok(Done(f"Attempt recorded ({status.value}).", drain=True))
@@ -525,10 +564,12 @@ def attempt_finish(ctx: Ctx, summary: str | None, blocked: str | None) -> Outcom
 # --- verify and verdict ------------------------------------------------------
 
 
-def _record_decision(ctx: Ctx, item: Item, tier: Tier, decision: Decision, why: str) -> Result[None, str]:
-    values = {f"lite.attempt.{tier.value}": ("approved" if decision.action is Action.LAND else f"rejected: {why}")}
+def _record_decision(ctx: Ctx, item: Item, attempt: Attempt, decision: Decision, why: str) -> Result[None, str]:
+    values = {f"lite.attempt.{attempt.key}": ("approved" if decision.action is Action.LAND else f"rejected: {why}")}
     if decision.action is Action.LAND:
-        values["lite.passed_tier"] = tier.value
+        values["lite.passed_tier"] = attempt.tier.value
+    else:
+        values["lite.last_rejected"] = attempt.key
     if decision.action is Action.BLOCKED:
         values["lite.result"] = "blocked"
     recorded = ctx.gc.set_metadata(item.anchor.bead_id, values)
@@ -537,7 +578,7 @@ def _record_decision(ctx: Ctx, item: Item, tier: Tier, decision: Decision, why: 
     if decision.action is Action.T3:
         body = (
             f"{item.anchor.bead_id} ({item.anchor.title}) failed at t1 and t2: {why}\n"
-            f"Findings: {_layout(ctx, item).findings(tier)}\n"
+            f"Findings: {_layout(ctx, item).findings(attempt)}\n"
             f"Approve a t3 attempt with: gc superpowers-lite approve --rig {ctx.env.rig} {item.anchor.bead_id}\n"
             "Leave it to keep the item waiting."
         )
@@ -547,34 +588,35 @@ def _record_decision(ctx: Ctx, item: Item, tier: Tier, decision: Decision, why: 
     return Ok(None)
 
 
-def _close_verify(ctx: Ctx, item: Item, tier: Tier, verdict: Verdict, why: str) -> Outcome:
-    decision = decide(tier, verdict)
-    recorded = _record_decision(ctx, item, tier, decision, why)
+def _close_verify(ctx: Ctx, item: Item, attempt: Attempt, verdict: Verdict, why: str, retryable: bool = True) -> Outcome:
+    decision = decide(attempt, verdict, retryable)
+    recorded = _record_decision(ctx, item, attempt, decision, why)
     if isinstance(recorded, Err):
         return recorded
     closed = _close_step(
-        ctx, item.step, decision.outcome, f"{tier.value} {verdict.value}: {why}"[:500],
+        ctx, item.step, decision.outcome, f"{attempt.key} {verdict.value}: {why}"[:500],
         {"gc.output_json": decision.output_json, "lite.verdict": verdict.value},
     )
     if isinstance(closed, Err):
         return closed
-    return Ok(Done(f"Verdict recorded: {verdict.value}; next: {decision.action.value}.", drain=True))
+    next_name = decision.next_attempt.key if decision.next_attempt is not None else decision.action.value
+    return Ok(Done(f"Verdict recorded: {verdict.value}; next: {next_name}.", drain=True))
 
 
-def _report_check(layout: Layout, tier: Tier, card_id: str) -> tuple[checks.CheckResult, reports.Report | None]:
-    text = _read(layout.report(tier))
+def _report_check(layout: Layout, attempt: Attempt, card_id: str) -> tuple[checks.CheckResult, reports.Report | None]:
+    text = _read(layout.report(attempt))
     if isinstance(text, Err):
         return checks.CheckResult("report-valid", False, (text.error,)), None
     parsed = reports.parse(text.value)
     if isinstance(parsed, Err):
         return checks.CheckResult("report-valid", False, (parsed.error,)), None
-    if parsed.value.tier is not tier or parsed.value.card_id != card_id:
+    if parsed.value.tier is not attempt.tier or parsed.value.card_id != card_id:
         return checks.CheckResult("report-valid", False, ("the report is for another tier or card",)), None
     return checks.CheckResult("report-valid", True, ()), parsed.value
 
 
-def _findings_text(tier: Tier, results: list[checks.CheckResult], extra: str = "") -> str:
-    lines = [f"# Why the {tier.value} attempt was rejected", ""]
+def _findings_text(attempt: Attempt, results: list[checks.CheckResult], extra: str = "") -> str:
+    lines = [f"# Why the {attempt.key} attempt was rejected", ""]
     for result in results:
         if not result.passed:
             lines.append(f"## {result.name}")
@@ -598,10 +640,10 @@ def verify(ctx: Ctx) -> Outcome:
 
 
 def _verify(ctx: Ctx, item: Item) -> Outcome:
-    tier_result = step_tier(item.step)
-    if isinstance(tier_result, Err):
-        return tier_result
-    tier = tier_result.value
+    attempt_result = step_attempt(item.step)
+    if isinstance(attempt_result, Err):
+        return attempt_result
+    attempt = attempt_result.value
     workdir = _workdir(item)
     if isinstance(workdir, Err):
         return workdir
@@ -610,7 +652,7 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
         return card
     layout = _layout(ctx, item)
     base = item.anchor.meta("lite.base_commit")
-    report_result, report = _report_check(layout, tier, item.anchor.bead_id)
+    report_result, report = _report_check(layout, attempt, item.anchor.bead_id)
     results = [report_result]
     if report is not None and report.status is reports.Status.BLOCKED:
         results.append(checks.CheckResult("executor", False, (f"the executor reported a blocker: {report.summary}",)))
@@ -623,12 +665,12 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
         changes = gitops.diff(workdir.value, base)
         if isinstance(changes, Err):
             return changes
-        saved = _write(layout.diff(tier), changes.value.full)
+        saved = _write(layout.diff(attempt), changes.value.full)
         if isinstance(saved, Err):
             return saved
         shared = cards.overlap(card.value, checks.added_lines(changes.value.unified))
-        log.info("card overlap for %s %s: %s lines copied from the card", item.anchor.bead_id, tier.value, shared)
-        recorded = ctx.gc.set_metadata(item.anchor.bead_id, {f"lite.card_overlap.{tier.value}": str(shared)})
+        log.info("card overlap for %s %s: %s lines copied from the card", item.anchor.bead_id, attempt.key, shared)
+        recorded = ctx.gc.set_metadata(item.anchor.bead_id, {f"lite.card_overlap.{attempt.key}": str(shared)})
         if isinstance(recorded, Err):
             return recorded
         parsed = checks.parse_name_status(changes.value.name_status)
@@ -649,14 +691,15 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
         if isinstance(restored, Err):
             return restored
     summary = {r.name: ("pass" if r.passed else "fail") for r in results}
-    log.info("checks for %s %s: %s", item.anchor.bead_id, tier.value, summary)
+    log.info("checks for %s %s: %s", item.anchor.bead_id, attempt.key, summary)
     failed = [r for r in results if not r.passed]
     if failed:
-        written = _write(layout.findings(tier), _findings_text(tier, results))
+        written = _write(layout.findings(attempt), _findings_text(attempt, results))
         if isinstance(written, Err):
             return written
         why = "failed checks: " + ", ".join(r.name for r in failed)
-        return _close_verify(ctx, item, tier, Verdict.REJECT, why)
+        retryable = report is None or report.status is not reports.Status.BLOCKED
+        return _close_verify(ctx, item, attempt, Verdict.REJECT, why, retryable)
     marked = ctx.gc.set_metadata(item.step.bead_id, {"lite.checks": "passed", "lite.checks_at": _now()})
     if isinstance(marked, Err):
         return marked
@@ -664,10 +707,10 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
         Done(
             "\n".join(
                 [
-                    f"Every check passed for the {tier.value} attempt on {item.anchor.bead_id}.",
+                    f"Every check passed for the {attempt.key} attempt on {item.anchor.bead_id}.",
                     f"Card: {layout.card}",
-                    f"Diff: {layout.diff(tier)}",
-                    f"Executor report: {layout.report(tier)}",
+                    f"Diff: {layout.diff(attempt)}",
+                    f"Executor report: {layout.report(attempt)}",
                     "",
                     "Review the diff against the card's Goal, Steps, Out of scope and Checklist.",
                     "Approve when the change does what the card asks and nothing else:",
@@ -688,22 +731,22 @@ def verdict(ctx: Ctx, choice: Verdict, reason: str | None) -> Outcome:
     if isinstance(found, Err):
         return found
     item = found.value
-    tier_result = step_tier(item.step)
-    if isinstance(tier_result, Err):
-        return tier_result
-    tier = tier_result.value
+    attempt_result = step_attempt(item.step)
+    if isinstance(attempt_result, Err):
+        return attempt_result
+    attempt = attempt_result.value
     if item.step.meta("lite.checks") != "passed":
         return Err("run `gc superpowers-lite verify` first; a verdict needs passing checks")
     layout = _layout(ctx, item)
     text = (reason or "approved").strip()
-    review = _write(layout.attempt_dir(tier) / "review.md", f"# {choice.value}\n\n{text}\n")
+    review = _write(layout.attempt_dir(attempt) / "review.md", f"# {choice.value}\n\n{text}\n")
     if isinstance(review, Err):
         return review
     if choice is Verdict.REJECT:
-        written = _write(layout.findings(tier), _findings_text(tier, [], text))
+        written = _write(layout.findings(attempt), _findings_text(attempt, [], text))
         if isinstance(written, Err):
             return written
-    return _close_verify(ctx, item, tier, choice, "review approved" if choice is Verdict.APPROVE else f"review: {text}")
+    return _close_verify(ctx, item, attempt, choice, "review approved" if choice is Verdict.APPROVE else f"review: {text}")
 
 
 # --- approval, land, close ---------------------------------------------------

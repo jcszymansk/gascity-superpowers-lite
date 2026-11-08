@@ -244,6 +244,11 @@ card ─► executor-t1 ─► checks ─┬─ pass ─► card-reviewer ─┬
                                │                        └─ reject ─┐
                                └─ fail ────────────────────────────┤
                                                                    ▼
+                      executor-t1 retry, from the rejected attempt + its findings
+                      (skipped when the executor reported a blocker)
+                                                                   ▼
+                      checks + card-reviewer ─ fail ───────────────┤
+                                                                   ▼
                       reset worktree; executor-t2 gets card + failed diff + check output
                                                                    ▼
                       checks + card-reviewer ─ fail ─► human gate ─ approve ─► executor-t3
@@ -255,8 +260,9 @@ card ─► executor-t1 ─► checks ─┬─ pass ─► card-reviewer ─┬
   deciding whether a later attempt is needed, and attempts that are not needed never exist as
   beads. The item formula runs prepare, cut-card, the T1 attempt and a verify step. Verify (run by
   `card-reviewer`, which first runs the checks through a pack command) writes its structured
-  output as `{"next": [{"action": "land"}]}`, or `t2`, or `t3`, or `blocked`. Its `on_complete`
-  bonds `superpowers-lite-next` with that action. `superpowers-lite-next` uses `condition` on
+  output as `{"next": [{"action": "land", "round": "1"}]}`, or `t1` with round 2 for the T1
+  retry, or `t2`, or `t3`, or `blocked`. Its `on_complete` bonds `superpowers-lite-next` with
+  that action and round. `superpowers-lite-next` uses `condition` on
   the action to contain either the human approval gate, the attempt and another verify (which
   bonds `superpowers-lite-next` again), or only `land`. A live run on gc 1.5.1 confirmed it
   end to end (see "Open questions").
@@ -471,6 +477,9 @@ Risks:
   67,854 tokens and 9 refusals in about 13 minutes. Both cards led Haiku to a T1 pass on all 36
   independent tests. At list prices Sonnet came out dearer, because its longer session re-read
   more cache, so `lite-plan` stays on Opus. The 8 KiB cap caused most of the refusals and was dropped.
+- T1 gets one retry before T2 (added 2026-11-08). The only real escalation so far
+  (`smt-rl47`) went to Sonnet to add docstrings, which Haiku could have fixed. The retry path is
+  covered by unit tests; no real run has taken it yet.
 - The per-item reviewer caught a real behavioural gap in a harness trial (2026-11-07): given the
   historical solution, which fails 5 of the 36 independent tests, Haiku rejected 6 of 6 and named
   the header and string-template faults each time, and it approved a good diff 3 of 3. That diff

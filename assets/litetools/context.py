@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Mapping
 
 from litetools.gc import Bead, Gc
-from litetools.ladder import Tier
+from litetools.ladder import Attempt, attempt_of
 from litetools.result import Err, Ok, Result
 
 log = logging.getLogger(__name__)
@@ -137,21 +137,21 @@ class Layout:
         """The sealed card executors work from."""
         return self.root / "card.md"
 
-    def attempt_dir(self, tier: Tier) -> Path:
-        """The directory for one tier's attempt."""
-        return self.root / "attempts" / tier.value
+    def attempt_dir(self, attempt: Attempt) -> Path:
+        """The directory for one attempt."""
+        return self.root / "attempts" / attempt.key
 
-    def report(self, tier: Tier) -> Path:
-        """The executor's report for ``tier``."""
-        return self.attempt_dir(tier) / "report.md"
+    def report(self, attempt: Attempt) -> Path:
+        """The executor's report for ``attempt``."""
+        return self.attempt_dir(attempt) / "report.md"
 
-    def diff(self, tier: Tier) -> Path:
-        """The attempt's full diff, saved for the reviewer and the next tier."""
-        return self.attempt_dir(tier) / "attempt.diff"
+    def diff(self, attempt: Attempt) -> Path:
+        """The attempt's full diff, saved for the reviewer and the next attempt."""
+        return self.attempt_dir(attempt) / "attempt.diff"
 
-    def findings(self, tier: Tier) -> Path:
-        """Why ``tier``'s attempt was rejected, for the next tier."""
-        return self.attempt_dir(tier) / "findings.md"
+    def findings(self, attempt: Attempt) -> Path:
+        """Why ``attempt`` was rejected, for the next attempt."""
+        return self.attempt_dir(attempt) / "findings.md"
 
 
 def layout_for(env: Env, anchor_id: str) -> Layout:
@@ -209,10 +209,7 @@ def resolve_item(gc: Gc, step: Bead) -> Result[Item, str]:
     return Ok(Item(step, root.value, anchor.value, parent))
 
 
-def step_tier(step: Bead) -> Result[Tier, str]:
-    """Return the tier recorded on an attempt or verify step."""
-    raw = step.meta("lite.tier")
-    for tier in Tier:
-        if tier.value == raw:
-            return Ok(tier)
-    return Err(f"step {step.bead_id} has no valid lite.tier (got {raw!r})")
+def step_attempt(step: Bead) -> Result[Attempt, str]:
+    """Return the attempt an attempt or verify step serves, from ``lite.tier`` and ``lite.round``."""
+    found = attempt_of(step.meta("lite.tier"), step.meta("lite.round"))
+    return Err(f"step {step.bead_id} has {found.error}") if isinstance(found, Err) else found
