@@ -12,21 +12,21 @@ target_required = true
 [[steps]]
 id = "prepare-worktree"
 title = "Prepare the item worktree on its target branch"
-metadata = { "gc.run_target" = "superpowers-lite.operator", "lite.step" = "prepare-worktree" }
+metadata = { "gc.run_target" = "superpowers-lite.operator", "lite.step" = "prepare-worktree", "gc.scope_ref" = "item", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope" }
 description_file = "../assets/workflows/superpowers-lite-work-item/prepare-worktree.md"
 
 [[steps]]
 id = "cut-card"
 title = "Cut the task card for {{issue}}"
 needs = ["prepare-worktree"]
-metadata = { "gc.run_target" = "superpowers-lite.card-cutter", "lite.step" = "cut-card" }
+metadata = { "gc.run_target" = "superpowers-lite.card-cutter", "lite.step" = "cut-card", "gc.scope_ref" = "item", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope" }
 description_file = "../assets/workflows/superpowers-lite-work-item/cut-card.md"
 
 [[steps]]
 id = "attempt-t1"
 title = "T1 attempt for {{issue}}"
 needs = ["cut-card"]
-metadata = { "gc.run_target" = "superpowers-lite.executor-t1", "lite.step" = "attempt", "lite.tier" = "t1" }
+metadata = { "gc.run_target" = "superpowers-lite.executor-t1", "lite.step" = "attempt", "lite.tier" = "t1", "gc.scope_ref" = "item", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope" }
 description_file = "../assets/workflows/superpowers-lite-work-item/attempt.md"
 
 # The verdict, not a model, decides what follows: verify writes
@@ -37,7 +37,7 @@ description_file = "../assets/workflows/superpowers-lite-work-item/attempt.md"
 id = "verify-t1"
 title = "Verify the T1 attempt for {{issue}}"
 needs = ["attempt-t1"]
-metadata = { "gc.run_target" = "superpowers-lite.card-reviewer", "lite.step" = "verify", "lite.tier" = "t1" }
+metadata = { "gc.run_target" = "superpowers-lite.card-reviewer", "lite.step" = "verify", "lite.tier" = "t1", "gc.scope_ref" = "item", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope" }
 description_file = "../assets/workflows/superpowers-lite-work-item/verify.md"
 
 [steps.on_complete]
@@ -45,3 +45,14 @@ for_each = "output.next"
 bond = "superpowers-lite-next"
 vars = { action = "{item.action}", round = "{item.round}", issue = "{{issue}}" }
 sequential = true
+
+# Every step above is a member of this scope. A member that closes failed (a
+# worktree that cannot be prepared, an uncuttable card, a blocked verify)
+# makes gc skip the members still waiting, so no agent is sent to a step that
+# can only refuse. The steps verify bonds at runtime inherit the scope from
+# its fanout, and the body stays open until they finish.
+[[steps]]
+id = "item"
+title = "Item scope for {{issue}}"
+needs = ["prepare-worktree", "cut-card", "attempt-t1", "verify-t1"]
+metadata = { "gc.kind" = "scope", "gc.scope_name" = "item", "gc.scope_role" = "body" }

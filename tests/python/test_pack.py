@@ -27,10 +27,15 @@ def _toml(path: Path) -> dict[str, Any]:
     return tomllib.loads(path.read_text(encoding="utf-8"))
 
 
-def _steps(name: str) -> list[dict[str, Any]]:
+def _all_steps(name: str) -> list[dict[str, Any]]:
     data = _toml(PACK / "formulas" / f"{name}.formula.toml")
     steps: list[dict[str, Any]] = data.get("steps", []) + data.get("template", [])
     return steps
+
+
+def _steps(name: str) -> list[dict[str, Any]]:
+    """The steps an agent runs: everything but scope bodies, which gc closes itself."""
+    return [s for s in _all_steps(name) if s.get("metadata", {}).get("gc.kind") != "scope"]
 
 
 def _commands() -> set[str]:
@@ -79,6 +84,29 @@ def test_every_verify_bond_passes_action_and_round() -> None:
         assert bond["bond"] == "superpowers-lite-next" and bond["for_each"] == "output.next"
         assert bond["vars"]["action"] == "{item.action}" and bond["vars"]["round"] == "{item.round}"
     assert _toml(PACK / "formulas" / "superpowers-lite-next.formula.toml")["vars"]["round"]["default"] == "1"
+
+
+def test_every_item_step_aborts_the_item_scope_when_it_fails() -> None:
+    steps = _all_steps("superpowers-lite-work-item")
+    bodies = [s for s in steps if s.get("metadata", {}).get("gc.kind") == "scope"]
+    assert len(bodies) == 1
+    body = bodies[0]
+    assert body["metadata"]["gc.scope_role"] == "body"
+    members = _steps("superpowers-lite-work-item")
+    assert sorted(body["needs"]) == sorted(m["id"] for m in members)
+    for member in members:
+        meta = member["metadata"]
+        assert meta["gc.scope_ref"] == body["id"], member["id"]
+        assert meta["gc.scope_role"] == "member", member["id"]
+        assert meta["gc.on_fail"] == "abort_scope", member["id"]
+
+
+def test_fragment_steps_inherit_the_scope_instead_of_naming_one() -> None:
+    # gc copies gc.scope_ref and gc.on_fail from the verify fanout onto bonded
+    # steps only when they carry none, so a fragment that named a scope would
+    # escape the item's.
+    for step in _all_steps("superpowers-lite-next"):
+        assert not {"gc.scope_ref", "gc.scope_role", "gc.on_fail", "gc.kind"} & set(step["metadata"]), step["id"]
 
 
 def test_every_command_has_a_runner_and_a_cli_subcommand() -> None:
