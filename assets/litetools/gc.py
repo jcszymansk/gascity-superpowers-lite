@@ -31,6 +31,8 @@ class Bead:
         description: The bead description.
         assignee: The current assignee, or an empty string.
         metadata: The bead's metadata, values as strings.
+        blocked_by: The beads this one depends on through ``blocks`` edges,
+            as ``gc bd show`` embeds them. Their own ``blocked_by`` is empty.
     """
 
     bead_id: str
@@ -39,6 +41,7 @@ class Bead:
     description: str
     assignee: str
     metadata: Mapping[str, str] = field(default_factory=dict)
+    blocked_by: tuple["Bead", ...] = ()
 
     def meta(self, key: str) -> str:
         """Return metadata ``key`` stripped, or an empty string."""
@@ -57,6 +60,17 @@ def bead_from_json(data: object) -> Result[Bead, str]:
     if not isinstance(raw_meta, dict):
         return Err(f"bead {data['id']} has non-object metadata")
     metadata = {str(k): v if isinstance(v, str) else json.dumps(v) for k, v in raw_meta.items()}
+    raw_deps = data.get("dependencies") or []
+    if not isinstance(raw_deps, list):
+        return Err(f"bead {data['id']} has non-list dependencies")
+    blockers: list[Bead] = []
+    for dep in raw_deps:
+        if not isinstance(dep, dict) or dep.get("dependency_type") != "blocks":
+            continue
+        blocker = bead_from_json({k: v for k, v in dep.items() if k != "dependencies"})
+        if isinstance(blocker, Err):
+            return Err(f"bead {data['id']} has a malformed blocker: {blocker.error}")
+        blockers.append(blocker.value)
     return Ok(
         Bead(
             bead_id=data["id"],
@@ -65,6 +79,7 @@ def bead_from_json(data: object) -> Result[Bead, str]:
             description=str(data.get("description") or ""),
             assignee=str(data.get("assignee") or ""),
             metadata=metadata,
+            blocked_by=tuple(blockers),
         )
     )
 

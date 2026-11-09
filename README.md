@@ -122,11 +122,19 @@ and refuses when the target moved since the item started. A drain runs its items
 that share a target must be ordered with `blocks` edges (`gc bd dep add <later> <earlier> --type
 blocks`); beads with their own `lite/<id>` targets need no ordering.
 
+A failure ends the item without sending agents to steps that can only refuse. The item's steps
+form one gc scope with `gc.on_fail = "abort_scope"`: when one closes failed (a worktree that
+cannot be prepared, an uncuttable card, a blocked verify), gc skips the steps still waiting,
+including those verify bonded at runtime, and the item fails. A failed item does not stop the
+drain, but its `blocks` successors do not run on a target that lacks it: prepare-worktree fails
+an item whose predecessor is not closed, or closed with a `lite.result` other than `landed`, and
+records `lite.result = skipped`. A predecessor a human closed without lite counts as done.
+
 The work bead records the outcome: `lite.kind`, one `lite.attempt.<attempt>` entry per attempt
 (`t1`, the retry `t1.2`, `t2`, `t3`; `approved` or the check or review finding that rejected
 it), `lite.last_rejected`, `lite.passed_tier`, `lite.card_overlap.<attempt>` (how many of the
 attempt's added lines of 12 or more characters appear verbatim in the card, such as `4/333`), and
-`lite.result` (`landed`, `blocked`, `uncuttable` or `land-refused`). Cards, reports, diffs and
+`lite.result` (`landed`, `blocked`, `uncuttable`, `land-refused` or `skipped`). Cards, reports, diffs and
 findings are kept under `$GC_CITY/.gc/artifacts/<rig>/superpowers-lite/<bead>/`.
 
 ### Approving a T3 attempt

@@ -239,9 +239,31 @@ def prepare_worktree(ctx: Ctx) -> Outcome:
     return closed if isinstance(closed, Err) else Ok(Done(f"Prepared: {prepared.value}.", drain=True))
 
 
+def _unlanded_blockers(anchor: Bead) -> list[str]:
+    """Describe each ``blocks`` predecessor of ``anchor`` that has not landed.
+
+    A predecessor counts as done when it is closed and lite did not record a
+    failed result on it; a bead closed by a human without lite counts as done.
+    The drain starts an item only after its predecessors' items finish, so an
+    open predecessor here is one whose item failed.
+    """
+    return [
+        f"{b.bead_id} ({b.status}, lite.result={b.meta('lite.result') or 'none'})"
+        for b in anchor.blocked_by
+        if b.status != "closed" or b.meta("lite.result") not in ("", "landed")
+    ]
+
+
 def _prepare(ctx: Ctx, item: Item) -> Result[str, str]:
     rig = ctx.env.rig_root
     anchor = item.anchor
+    unlanded = _unlanded_blockers(anchor)
+    if unlanded:
+        log.warning("item %s: predecessors did not land: %s", anchor.bead_id, ", ".join(unlanded))
+        marked = ctx.gc.set_metadata(anchor.bead_id, {"lite.result": "skipped"})
+        if isinstance(marked, Err):
+            return marked
+        return Err(f"skipped: {anchor.bead_id} is blocked by work that did not land: {', '.join(unlanded)}")
     default = _default_branch(ctx)
     if isinstance(default, Err):
         return default

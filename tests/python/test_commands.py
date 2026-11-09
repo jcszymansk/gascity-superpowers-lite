@@ -216,6 +216,56 @@ def test_verify_closes_failed_when_the_checks_cannot_run(world: World) -> None:
     assert "could not read" in world.bead("s-ver-t1")["close_reason"]
 
 
+def _blocked_by(world: World, *blockers: dict[str, Any]) -> None:
+    state = world.state
+    state["beads"][ANCHOR]["dependencies"] = [
+        {"id": "st-0", "dependency_type": "parent-child", "status": "open", "metadata": {}},
+        *({"dependency_type": "blocks", "metadata": {}, **b} for b in blockers),
+    ]
+    world.save(state)
+
+
+@pytest.mark.parametrize(
+    "blocker",
+    [
+        {"id": "st-p", "status": "closed", "metadata": {"lite.result": "landed"}},
+        {"id": "st-p", "status": "closed"},
+    ],
+    ids=["landed", "closed-by-a-human"],
+)
+def test_prepare_worktree_proceeds_when_every_predecessor_is_done(world: World, blocker: dict[str, Any]) -> None:
+    _blocked_by(world, blocker)
+    prepared(world)
+    assert world.meta("s-prep")["gc.outcome"] == "pass"
+    assert world.worktree.exists()
+
+
+@pytest.mark.parametrize(
+    ("blocker", "shown"),
+    [
+        ({"id": "st-p", "status": "open", "metadata": {"lite.result": "uncuttable"}}, "st-p (open, lite.result=uncuttable)"),
+        ({"id": "st-p", "status": "open"}, "st-p (open, lite.result=none)"),
+        ({"id": "st-p", "status": "in_progress", "metadata": {"lite.result": "landed"}}, "st-p (in_progress, lite.result=landed)"),
+        ({"id": "st-p", "status": "closed", "metadata": {"lite.result": "blocked"}}, "st-p (closed, lite.result=blocked)"),
+    ],
+    ids=["failed-item", "never-ran", "not-closed", "closed-without-landing"],
+)
+def test_prepare_worktree_skips_an_item_whose_predecessor_did_not_land(
+    world: World, blocker: dict[str, Any], shown: str
+) -> None:
+    _blocked_by(world, {"id": "st-q", "status": "closed", "metadata": {"lite.result": "landed"}}, blocker)
+    result = world.claim_and_run("s-prep", "prepare-worktree", "prepare-worktree")
+    assert result.returncode == 0
+    assert world.meta("s-prep")["gc.outcome"] == "fail"
+    reason = world.bead("s-prep")["close_reason"]
+    assert reason.startswith(f"skipped: {ANCHOR} is blocked by work that did not land")
+    assert shown in reason
+    assert "st-q" not in reason
+    assert world.meta(ANCHOR)["lite.result"] == "skipped"
+    assert "work_dir" not in world.meta(ANCHOR)
+    assert not world.worktree.exists()
+
+
 def test_prepare_worktree_bases_on_an_existing_target(world: World) -> None:
     git(world.rig, "branch", "feature/x")
     git(world.rig, "commit", "-q", "--allow-empty", "-m", "later on main")
