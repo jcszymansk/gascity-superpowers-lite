@@ -302,6 +302,9 @@ def _prepare(ctx: Ctx, item: Item) -> Result[str, str]:
         if isinstance(added, Err):
             return added
         base_commit = base.value
+    submodules = gitops.init_submodules(worktree)
+    if isinstance(submodules, Err):
+        return submodules
     log.info("item %s: target %s, base %s (%s)", anchor.bead_id, target, base_ref, base_commit)
     layout = _layout(ctx, item)
     recorded_meta = {

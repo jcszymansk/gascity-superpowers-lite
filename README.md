@@ -117,10 +117,11 @@ Each bead becomes one item, run by the pack's own agents, each step in a fresh s
 
 The target branch is the bead's `target` metadata, else the convoy's, else `lite/<bead id>`. The
 default branch is never a target; merging stays a human step. The worktree starts from the target
-branch if it exists, otherwise from the default branch. Land moves the target by compare-and-swap
-and refuses when the target moved since the item started. A drain runs its items at once, so beads
-that share a target must be ordered with `blocks` edges (`gc bd dep add <later> <earlier> --type
-blocks`); beads with their own `lite/<id>` targets need no ordering.
+branch if it exists, otherwise from the default branch, with its submodules checked out (from the
+rig's own submodule clones where it has them). Land moves the target by compare-and-swap and refuses
+when the target moved since the item started. A drain runs its items at once, so beads that share a
+target must be ordered with `blocks` edges (`gc bd dep add <later> <earlier> --type blocks`); beads
+with their own `lite/<id>` targets need no ordering.
 
 A failure ends the item without sending agents to steps that can only refuse. The item's steps
 form one gc scope with `gc.on_fail = "abort_scope"`: when one closes failed (a worktree that

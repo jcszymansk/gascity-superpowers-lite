@@ -105,11 +105,13 @@ class World:
         }
         return subprocess.run([sys.executable, str(PACK / "assets" / "lite.py"), *args], env={**base, **(env or {})}, capture_output=True, text=True, check=False)
 
-    def claim_and_run(self, bead_id: str, step: str, *args: str, tier: str = "", round_: str = "") -> subprocess.CompletedProcess[str]:
+    def claim_and_run(
+        self, bead_id: str, step: str, *args: str, tier: str = "", round_: str = "", env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
         self.add_step(bead_id, step, tier, round_=round_)
-        claimed = self.run("claim")
+        claimed = self.run("claim", env=env)
         assert claimed.returncode == 0, claimed.stderr
-        return self.run(*args)
+        return self.run(*args, env=env)
 
     @property
     def worktree(self) -> Path:
@@ -264,6 +266,39 @@ def test_prepare_worktree_skips_an_item_whose_predecessor_did_not_land(
     assert world.meta(ANCHOR)["lite.result"] == "skipped"
     assert "work_dir" not in world.meta(ANCHOR)
     assert not world.worktree.exists()
+
+
+FILE_PROTOCOL = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "protocol.file.allow", "GIT_CONFIG_VALUE_0": "always"}
+
+
+def _with_submodule(world: World) -> None:
+    lib = world.tmp / "lib-src"
+    lib.mkdir()
+    git(lib, "init", "-q", "-b", "main")
+    (lib / "lib.txt").write_text("from the submodule\n")
+    git(lib, "add", "-A")
+    git(lib, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "lib")
+    git(world.rig, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(lib), "lib")
+    git(world.rig, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "add lib")
+
+
+def test_prepare_worktree_checks_out_submodules(world: World) -> None:
+    _with_submodule(world)
+    result = world.claim_and_run("s-prep", "prepare-worktree", "prepare-worktree", env=FILE_PROTOCOL)
+    assert result.returncode == 0, result.stderr
+    assert world.meta("s-prep")["gc.outcome"] == "pass"
+    assert (world.worktree / "lib" / "lib.txt").read_text() == "from the submodule\n"
+
+
+def test_prepare_worktree_fails_when_a_submodule_cannot_be_checked_out(world: World) -> None:
+    _with_submodule(world)
+    missing = "0123456789abcdef0123456789abcdef01234567"
+    git(world.rig, "update-index", "--cacheinfo", f"160000,{missing},lib")
+    git(world.rig, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "point lib at a missing commit")
+    result = world.claim_and_run("s-prep", "prepare-worktree", "prepare-worktree", env=FILE_PROTOCOL)
+    assert result.returncode == 0
+    assert world.meta("s-prep")["gc.outcome"] == "fail"
+    assert "could not check out submodules" in world.bead("s-prep")["close_reason"]
 
 
 def test_prepare_worktree_bases_on_an_existing_target(world: World) -> None:

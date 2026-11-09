@@ -52,6 +52,20 @@ def rev(repo: Path, ref: str) -> Result[str, str]:
     return Ok(out.value.strip()) if isinstance(out, Ok) else Err(f"{ref} does not resolve to a commit")
 
 
+def init_submodules(worktree: Path) -> Result[None, str]:
+    """Check out the submodules a worktree's ``.gitmodules`` declares, recursively.
+
+    ``git worktree add`` leaves submodule directories empty, and a build that
+    includes one (a Gradle ``includeBuild``, say) fails in such a worktree.
+    A worktree without ``.gitmodules`` is left alone.
+    """
+    if not (worktree / ".gitmodules").is_file():
+        return Ok(None)
+    log.info("initialising submodules in %s", worktree)
+    out = git(worktree, "submodule", "update", "--init", "--recursive")
+    return Ok(None) if isinstance(out, Ok) else Err(f"could not check out submodules: {out.error}")
+
+
 def is_ancestor(repo: Path, older: str, newer: str) -> bool:
     """Return True when ``older`` is an ancestor of (or equal to) ``newer``."""
     return git_ok(repo, "merge-base", "--is-ancestor", older, newer)
