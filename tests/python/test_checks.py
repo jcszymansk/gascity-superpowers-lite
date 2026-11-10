@@ -54,37 +54,70 @@ def diff(path: str, *lines: str) -> str:
     return "\n".join([f"diff --git a/{path} b/{path}", f"--- a/{path}", f"+++ b/{path}", "@@ -1,1 +1,1 @@", *lines])
 
 
-def test_tests_intact_passes_for_added_tests() -> None:
-    result = checks.tests_intact((ChangedPath("M", "tests/a.rs", "tests/a.rs"),), diff("tests/a.rs", "+#[test]", "+fn empty() {}"))
+def test_no_skip_markers_passes_for_added_tests() -> None:
+    result = checks.no_skip_markers(diff("tests/a.rs", "+#[test]", "+fn empty() {}"))
     assert result.passed, result.details
-
-
-def test_tests_intact_flags_deleted_test_files() -> None:
-    result = checks.tests_intact((ChangedPath("D", "tests/a.rs", "tests/a.rs"),), "")
-    assert result.details == ("deleted test file: tests/a.rs",)
 
 
 @pytest.mark.parametrize(
     "marker",
     ["#[ignore]", "@Ignore", "@Disabled", "@pytest.mark.skip(reason='x')", "it.skip('a', () => {})", "xit('a')", "t.Skip(\"later\")", "@unittest.skip('x')", "pytest.skip('x')"],
 )
-def test_tests_intact_flags_added_skip_markers(marker: str) -> None:
-    result = checks.tests_intact((), diff("tests/a.rs", f"+{marker}"))
+def test_no_skip_markers_flags_added_skip_markers(marker: str) -> None:
+    result = checks.no_skip_markers(diff("tests/a.rs", f"+{marker}"))
+    assert result.name == "no-skip-markers"
     assert not result.passed
-    assert result.details[0].startswith("added a skip marker in tests/a.rs")
+    assert result.details == (f"added a skip marker in tests/a.rs: {marker}",)
 
 
-def test_tests_intact_flags_net_removed_test_declarations_only() -> None:
-    removed = diff("pkg/a_test.go", "-func TestA(t *testing.T) {", "-func TestB(t *testing.T) {", "+func TestA(t *testing.T) {")
-    result = checks.tests_intact((), removed)
-    assert result.details == ("removed 1 test declaration(s) from pkg/a_test.go",)
-    renamed = diff("pkg/a_test.go", "-func TestA(t *testing.T) {", "+func TestRenamed(t *testing.T) {")
-    assert checks.tests_intact((), renamed).passed
+def test_no_skip_markers_ignores_removed_markers() -> None:
+    assert checks.no_skip_markers(diff("tests/a.rs", "-#[ignore]")).passed
 
 
-def test_tests_intact_does_not_mistake_content_for_headers() -> None:
+def test_no_skip_markers_does_not_mistake_content_for_headers() -> None:
     text = diff("tests/a.py", "+++ looks like a header", "-def test_a():", "+def test_a():")
-    assert checks.tests_intact((), text).passed
+    assert checks.no_skip_markers(text).passed
+
+
+def test_removed_tests_is_empty_when_tests_are_only_added_or_renamed() -> None:
+    added = diff("tests/a.rs", "+#[test]", "+fn empty() {}")
+    assert checks.removed_tests((ChangedPath("M", "tests/a.rs", "tests/a.rs"),), added) == ()
+    renamed = diff("pkg/a_test.go", "-func TestA(t *testing.T) {", "+func TestRenamed(t *testing.T) {")
+    assert checks.removed_tests((), renamed) == ()
+
+
+def test_removed_tests_names_deleted_test_files_but_not_other_deleted_files() -> None:
+    changes = (ChangedPath("D", "tests/a.rs", "tests/a.rs"), ChangedPath("D", "src/old.rs", "src/old.rs"))
+    assert checks.removed_tests(changes, "") == ("deleted test file: tests/a.rs",)
+
+
+def test_removed_tests_counts_net_removals_per_file_and_names_them() -> None:
+    text = diff("pkg/a_test.go", "-func TestA(t *testing.T) {", "-func TestB(t *testing.T) {", "+func TestA(t *testing.T) {")
+    assert checks.removed_tests((), text) == (
+        "pkg/a_test.go: 1 test declaration(s) fewer; removed: func TestA(t *testing.T) {; func TestB(t *testing.T) {",
+    )
+
+
+def test_removed_tests_names_a_kotlin_test_by_the_line_after_its_annotation() -> None:
+    text = diff("app/src/test/FooTest.kt", "-    @Test", "-    fun artworkBumpsTheRevision() {", "-        assertEquals(1, x)")
+    assert checks.removed_tests((), text) == (
+        "app/src/test/FooTest.kt: 1 test declaration(s) fewer; removed: fun artworkBumpsTheRevision() {",
+    )
+
+
+def test_removed_tests_keeps_an_annotation_whose_next_line_was_not_removed() -> None:
+    text = diff("app/src/test/FooTest.kt", "-    @Test", "+    @Test")
+    assert checks.removed_tests((), text) == ()
+    lone = diff("app/src/test/FooTest.kt", "-    @Test")
+    assert checks.removed_tests((), lone) == ("app/src/test/FooTest.kt: 1 test declaration(s) fewer; removed: @Test",)
+
+
+def test_removed_tests_reports_each_file_separately_in_path_order() -> None:
+    text = diff("tests/b.py", "-def test_b():") + "\n" + diff("tests/a.py", "-def test_a():", "-def test_c():", "+def test_d():")
+    assert checks.removed_tests((), text) == (
+        "tests/a.py: 1 test declaration(s) fewer; removed: def test_a():; def test_c():",
+        "tests/b.py: 1 test declaration(s) fewer; removed: def test_b():",
+    )
 
 
 def test_card_done_runs_every_command_and_reports_each_failure(tmp_path: Path) -> None:

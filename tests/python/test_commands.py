@@ -552,14 +552,35 @@ def test_failed_checks_retry_t1_without_review(world: World) -> None:
     assert world.meta(ANCHOR)["lite.attempt.t1"].startswith("rejected: failed checks: diff-scope, card-done")
 
 
-def test_deleting_a_test_is_rejected(world: World) -> None:
+def test_deleting_a_test_goes_to_the_reviewer_with_the_removal_listed(world: World) -> None:
     sealed(world)
     world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
     (world.worktree / "src" / "app.txt").write_text("fixed\n")
     (world.worktree / "tests" / "app_test.txt").unlink()
     assert world.run("attempt-finish", "--summary", "drop test").returncode == 0
+    result = verified(world, "t1")
+    assert result.returncode == 0, result.stderr
+    assert world.meta("s-ver-t1")["lite.checks"] == "passed"
+    assert "The attempt removes tests:" in result.stdout
+    assert "  - deleted test file: tests/app_test.txt" in result.stdout
+    assert "Accept a removal only when the card asks for it" in result.stdout
+
+
+def test_an_attempt_that_removes_no_test_gets_no_removal_note(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "fixed\n")
+    result = verified(world, "t1")
+    assert result.returncode == 0, result.stderr
+    assert "removes tests" not in result.stdout
+
+
+def test_adding_a_skip_marker_is_rejected_without_review(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "fixed\n", extra={"tests/app_test.txt": "#[ignore]\n#[test]\nfn works() {}\n"})
     assert verified(world, "t1").returncode == 0
-    assert "tests-intact" in world.meta(ANCHOR)["lite.attempt.t1"]
+    assert "no-skip-markers" in world.meta(ANCHOR)["lite.attempt.t1"]
+    findings = (world.artifacts / "attempts" / "t1" / "findings.md").read_text()
+    assert "added a skip marker in tests/app_test.txt: #[ignore]" in findings
 
 
 def test_an_attempt_that_changes_nothing_is_rejected(world: World) -> None:

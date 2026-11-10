@@ -86,6 +86,7 @@ _TEST_DECLARATION = re.compile(
     r"#\[(tokio::)?test\]|@Test\b|@ParameterizedTest\b|\bdef test_|\bfunc Test[A-Z_]"
     r"|^\s*(it|test)\s*\(|^\s*fn test_"
 )
+_BARE_ANNOTATION = re.compile(r"^@\w+(\(.*\))?$")
 _SKIP_MARKER = re.compile(
     r"#\[ignore\b|@Ignore\b|@Disabled\b|pytest\.mark\.(skip|xfail)\b|unittest\.skip\b"
     r"|\b(it|test|describe)\.(skip|todo)\s*\(|\bx(it|describe|test)\s*\(|\bt\.Skip(Now|f)?\("
@@ -103,18 +104,13 @@ def added_lines(unified_diff: str) -> tuple[str, ...]:
     return tuple(line[1:] for line in unified_diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
 
 
-def tests_intact(changes: tuple[ChangedPath, ...], unified_diff: str) -> CheckResult:
-    """Fail when the attempt deletes tests or adds skip markers.
+def _diff_lines(unified_diff: str) -> list[tuple[str, str, str]]:
+    """Split ``git diff -U0`` output into (new path, sign, text) for each added or removed line.
 
-    Args:
-        changes: The attempt's changed paths.
-        unified_diff: ``git diff -U0`` output for the same range.
+    The path is empty for a deleted file. Header lines are skipped by position, so content
+    that looks like a header (``+++ x``) still counts as content.
     """
-    details: list[str] = [
-        f"deleted test file: {c.path}" for c in changes if c.status == "D" and is_test_path(c.path)
-    ]
-    removed: dict[str, int] = {}
-    added: dict[str, int] = {}
+    lines: list[tuple[str, str, str]] = []
     current = ""
     in_header = False
     for line in unified_diff.splitlines():
@@ -127,19 +123,62 @@ def tests_intact(changes: tuple[ChangedPath, ...], unified_diff: str) -> CheckRe
             elif line.startswith("@@"):
                 in_header = False
             continue
-        if line.startswith("+"):
-            text = line[1:]
-            if _SKIP_MARKER.search(text):
-                details.append(f"added a skip marker in {current or 'a deleted file'}: {text.strip()}")
-            if _TEST_DECLARATION.search(text):
-                added[current] = added.get(current, 0) + 1
-        elif line.startswith("-") and _TEST_DECLARATION.search(line[1:]):
-            removed[current] = removed.get(current, 0) + 1
-    for path, count in sorted(removed.items()):
-        net = count - added.get(path, 0)
-        if net > 0 and path:
-            details.append(f"removed {net} test declaration(s) from {path}")
-    return CheckResult("tests-intact", not details, tuple(details))
+        if line[:1] in ("+", "-"):
+            lines.append((current, line[0], line[1:]))
+    return lines
+
+
+def no_skip_markers(unified_diff: str) -> CheckResult:
+    """Fail when the attempt adds a skip or ignore marker.
+
+    A skipped test hides a failure while looking kept, so no card can ask for one.
+
+    Args:
+        unified_diff: ``git diff -U0`` output for the attempt.
+    """
+    details = tuple(
+        f"added a skip marker in {path or 'a deleted file'}: {text.strip()}"
+        for path, sign, text in _diff_lines(unified_diff)
+        if sign == "+" and _SKIP_MARKER.search(text)
+    )
+    return CheckResult("no-skip-markers", not details, details)
+
+
+def removed_tests(changes: tuple[ChangedPath, ...], unified_diff: str) -> tuple[str, ...]:
+    """List the tests an attempt removes, for the reviewer to judge.
+
+    Removing a test is right when the card asks for it or the diff deletes what the test
+    exercised, so this is review input, not a check. It names deleted test files and, per
+    file, the test declarations removed on net (a renamed test is no removal). A bare
+    annotation such as ``@Test`` is named by the removed line after it.
+
+    Args:
+        changes: The attempt's changed paths.
+        unified_diff: ``git diff -U0`` output for the same range.
+
+    Returns:
+        One line per deleted test file and per file that loses declarations.
+    """
+    found = [f"deleted test file: {c.path}" for c in changes if c.status == "D" and is_test_path(c.path)]
+    lines = _diff_lines(unified_diff)
+    removed: dict[str, list[str]] = {}
+    added: dict[str, int] = {}
+    for index, (path, sign, text) in enumerate(lines):
+        if not path or not _TEST_DECLARATION.search(text):
+            continue
+        if sign == "+":
+            added[path] = added.get(path, 0) + 1
+            continue
+        name = text.strip()
+        following = lines[index + 1] if index + 1 < len(lines) else None
+        if _BARE_ANNOTATION.match(name) and following is not None and following[:2] == (path, "-"):
+            name = following[2].strip()
+        removed.setdefault(path, []).append(name)
+    for path, names in sorted(removed.items()):
+        net = len(names) - added.get(path, 0)
+        if net > 0:
+            found.append(f"{path}: {net} test declaration(s) fewer; removed: " + "; ".join(names))
+    return tuple(found)
 
 
 def _tail(text: str) -> str:

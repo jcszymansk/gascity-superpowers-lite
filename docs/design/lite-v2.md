@@ -302,8 +302,15 @@ The `verify` command runs every check in the reviewer's session, before the revi
 | `executor` | the executor reported a blocker instead of a change |
 | `worktree-clean` | the attempt left uncommitted changes |
 | `diff-scope` | the diff is empty, or touches a file outside `files` |
-| `tests-intact` | the diff deletes a test file, adds a skip or ignore marker, or removes test declarations |
+| `no-skip-markers` | the diff adds a skip or ignore marker |
 | `card-done` | any `done_when` command fails |
+
+Removed tests are not a check. A fix that deletes code also deletes that code's tests, so
+`verify` lists deleted test files and test declarations removed on net, and the reviewer accepts
+a removal only when the card asks for it or the diff deletes or replaces the code the test
+exercised. Until 2026-11-10 a removal failed a `tests-intact` check, which no card could
+override, so a bead that removed `MainScreenModel.artworkChanged` and its test could not pass
+at any tier (FreeNetRadio fnr-5pfxs).
 
 Card validity is checked when the card is cut: `cut-card-finish` refuses an invalid card and the
 step stays open until the cutter fixes it. After the checks, `verify` resets the worktree to the

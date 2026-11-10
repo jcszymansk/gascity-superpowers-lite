@@ -679,6 +679,7 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
     base = item.anchor.meta("lite.base_commit")
     report_result, report = _report_check(layout, attempt, item.anchor.bead_id)
     results = [report_result]
+    removed: tuple[str, ...] = ()
     if report is not None and report.status is reports.Status.BLOCKED:
         results.append(checks.CheckResult("executor", False, (f"the executor reported a blocker: {report.summary}",)))
     else:
@@ -702,7 +703,10 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
         if not parsed:
             results.append(checks.CheckResult("diff-scope", False, ("the attempt changed nothing",)))
         results.append(checks.diff_scope(parsed, card.value.files))
-        results.append(checks.tests_intact(parsed, changes.value.unified))
+        results.append(checks.no_skip_markers(changes.value.unified))
+        removed = checks.removed_tests(parsed, changes.value.unified)
+        if removed:
+            log.info("%s %s removes tests: %s", item.anchor.bead_id, attempt.key, "; ".join(removed))
         head = gitops.rev(workdir.value, "HEAD")
         if isinstance(head, Err):
             return head
@@ -738,6 +742,7 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
                     f"Executor report: {layout.report(attempt)}",
                     "",
                     "Review the diff against the card's Goal, Steps, Out of scope and Checklist.",
+                    *_removed_tests_text(removed),
                     "Approve when the change does what the card asks and nothing else:",
                     "  gc superpowers-lite verdict approve",
                     "Otherwise name each problem, with file and line:",
@@ -746,6 +751,20 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
             )
         )
     )
+
+
+def _removed_tests_text(removed: tuple[str, ...]) -> list[str]:
+    """The review instructions for an attempt that removes tests, or nothing when it removes none."""
+    if not removed:
+        return []
+    return [
+        "",
+        "The attempt removes tests:",
+        *(f"  - {line}" for line in removed),
+        "Accept a removal only when the card asks for it, or when the diff deletes or replaces the",
+        "code the removed test exercised. Otherwise reject, naming each test that must stay.",
+        "",
+    ]
 
 
 def verdict(ctx: Ctx, choice: Verdict, reason: str | None) -> Outcome:
