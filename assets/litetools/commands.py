@@ -835,6 +835,11 @@ def approve(gc: Gc, anchor_id: str) -> Outcome:
             return Err("gc bd list printed unexpected JSON")
     if len(gates) != 1:
         return Err(f"expected one open t3 gate for {anchor_id}, found {len(gates)}: {', '.join(gates)}")
+    # The item's steps share an abort_scope scope, and gc counts a member closed
+    # without gc.outcome=pass as failed: the approval would abort the t3 attempt it opens.
+    passed = gc.set_metadata(gates[0], {"gc.outcome": "pass"})
+    if isinstance(passed, Err):
+        return passed
     closed = gc.close(gates[0], f"t3 attempt approved for {anchor_id}")
     return closed if isinstance(closed, Err) else Ok(Done(f"Approved: closed gate {gates[0]}."))
 

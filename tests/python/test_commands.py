@@ -706,6 +706,7 @@ def test_approve_closes_the_single_open_gate(world: World) -> None:
     result = world.run("approve", ANCHOR)
     assert result.returncode == 0, result.stderr
     assert world.bead("g-1")["status"] == "closed"
+    assert world.bead("g-1")["metadata"]["gc.outcome"] == "pass"
     again = world.run("approve", ANCHOR)
     assert again.returncode == 1 and "found 0" in again.stderr
     assert world.state.get("drained", 0) == 0
