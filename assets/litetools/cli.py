@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
-from litetools import commands
+from litetools import commands, donewhen
 from litetools.commands import Ctx, Outcome
 from litetools.context import load_env
 from litetools.gc import Gc
@@ -29,6 +29,8 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("claim", "prepare-worktree", "cut-card-start", "attempt-start", "verify", "approval", "land", "close-anchor"):
         sub.add_parser(name)
+    runner = sub.add_parser("done-when-run", help=argparse.SUPPRESS)
+    runner.add_argument("state_dir")
     finish_card = sub.add_parser("cut-card-finish")
     finish_card.add_argument("--blocked", help="the work bead cannot become a card, and why")
     finish = sub.add_parser("attempt-finish")
@@ -92,6 +94,8 @@ def main(argv: Sequence[str], environ: Mapping[str, str]) -> int:
     _setup_logging(environ)
     log.debug("%s %s", args.command, " ".join(argv[1:]))
     binary = environ.get("LITE_GC_BIN", "gc")
+    if args.command == "done-when-run":
+        return donewhen.run_detached(Path(args.state_dir))
     if args.command == "approve":
         rig = args.rig or environ.get("GC_RIG", "").strip()
         return _report(args.command, commands.approve(Gc(binary, dict(environ), rig), args.anchor), None)

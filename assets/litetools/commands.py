@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from litetools import card as cards
-from litetools import checks, gitops
+from litetools import checks, donewhen, gitops
 from litetools import report as reports
 from litetools.context import (
     Env,
@@ -652,6 +652,127 @@ def _findings_text(attempt: Attempt, results: list[checks.CheckResult], extra: s
     return "\n".join(lines)
 
 
+@dataclass(frozen=True, slots=True)
+class QuickChecks:
+    """The checks that take seconds, run once per attempt commit.
+
+    Attributes:
+        results: Every quick check's result.
+        removed: The tests the attempt removes, for the reviewer.
+        report: The executor's report, when it parsed.
+        blocked: True when the executor reported a blocker instead of a change.
+    """
+
+    results: tuple[checks.CheckResult, ...]
+    removed: tuple[str, ...]
+    report: reports.Report | None
+    blocked: bool
+
+
+def _quick_checks(
+    ctx: Ctx, item: Item, attempt: Attempt, layout: Layout, workdir: Path, card: cards.Card, head: str, state: donewhen.State
+) -> Result[QuickChecks, str]:
+    """Run the quick checks, or reuse what an earlier verify of this commit saved.
+
+    They are saved because they must see the worktree as the attempt left it:
+    once done_when runs, its build products would fail worktree-clean on a
+    second verify.
+    """
+    report_result, report = _report_check(layout, attempt, item.anchor.bead_id)
+    blocked = report is not None and report.status is reports.Status.BLOCKED
+    saved = _load_quick(state, head)
+    if saved is not None:
+        log.info("reusing the quick checks of %s %s at %s", item.anchor.bead_id, attempt.key, head)
+        return Ok(QuickChecks(saved[0], saved[1], report, blocked))
+    results = [report_result]
+    removed: tuple[str, ...] = ()
+    if blocked and report is not None:
+        results.append(checks.CheckResult("executor", False, (f"the executor reported a blocker: {report.summary}",)))
+    else:
+        clean = gitops.is_clean(workdir)
+        if isinstance(clean, Err):
+            return clean
+        if not clean.value:
+            results.append(checks.CheckResult("worktree-clean", False, ("the attempt left uncommitted changes",)))
+        base = item.anchor.meta("lite.base_commit")
+        changes = gitops.diff(workdir, base)
+        if isinstance(changes, Err):
+            return changes
+        saved_diff = _write(layout.diff(attempt), changes.value.full)
+        if isinstance(saved_diff, Err):
+            return saved_diff
+        shared = cards.overlap(card, checks.added_lines(changes.value.unified))
+        log.info("card overlap for %s %s: %s lines copied from the card", item.anchor.bead_id, attempt.key, shared)
+        recorded = ctx.gc.set_metadata(item.anchor.bead_id, {f"lite.card_overlap.{attempt.key}": str(shared)})
+        if isinstance(recorded, Err):
+            return recorded
+        parsed = checks.parse_name_status(changes.value.name_status)
+        if not parsed:
+            results.append(checks.CheckResult("diff-scope", False, ("the attempt changed nothing",)))
+        results.append(checks.diff_scope(parsed, card.files))
+        results.append(checks.no_skip_markers(changes.value.unified))
+        removed = checks.removed_tests(parsed, changes.value.unified)
+        if removed:
+            log.info("%s %s removes tests: %s", item.anchor.bead_id, attempt.key, "; ".join(removed))
+    stored = _store_quick(state, head, results, removed)
+    if isinstance(stored, Err):
+        return stored
+    return Ok(QuickChecks(tuple(results), removed, report, blocked))
+
+
+def _quick_file(state: donewhen.State) -> Path:
+    return state.root / "quick.json"
+
+
+def _load_quick(state: donewhen.State, head: str) -> tuple[tuple[checks.CheckResult, ...], tuple[str, ...]] | None:
+    try:
+        data = json.loads(_quick_file(state).read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("head") != head:
+        return None
+    raw_results, raw_removed = data.get("results"), data.get("removed")
+    if not isinstance(raw_results, list) or not isinstance(raw_removed, list):
+        return None
+    results: list[checks.CheckResult] = []
+    for entry in raw_results:
+        if not isinstance(entry, dict):
+            return None
+        name, passed, details = entry.get("name"), entry.get("passed"), entry.get("details")
+        if not isinstance(name, str) or not isinstance(passed, bool) or not isinstance(details, list):
+            return None
+        results.append(checks.CheckResult(name, passed, tuple(str(d) for d in details)))
+    return tuple(results), tuple(str(r) for r in raw_removed)
+
+
+def _store_quick(
+    state: donewhen.State, head: str, results: list[checks.CheckResult], removed: tuple[str, ...]
+) -> Result[None, str]:
+    data = {
+        "head": head,
+        "results": [{"name": r.name, "passed": r.passed, "details": list(r.details)} for r in results],
+        "removed": list(removed),
+    }
+    try:
+        state.root.mkdir(parents=True, exist_ok=True)
+        _quick_file(state).write_text(json.dumps(data, indent=2) + "\n")
+    except OSError as error:
+        return Err(f"could not save the quick checks in {state.root}: {error}")
+    return Ok(None)
+
+
+def _still_running_text(state: donewhen.State) -> str:
+    return "\n".join(
+        [
+            "The done_when checks are still running in the background; they survive this session.",
+            f"Their log: {state.log_file}",
+            "Run `gc superpowers-lite verify` again now, with your shell tool's longest timeout,",
+            "and keep doing so until it prints a result. Do not end your turn while they run:",
+            "gc restarts a session that sits idle at its prompt while it holds this step.",
+        ]
+    )
+
+
 def verify(ctx: Ctx) -> Outcome:
     """Run the checks on an attempt; reject it outright or hand it to review.
 
@@ -676,41 +797,25 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
     if isinstance(card, Err):
         return card
     layout = _layout(ctx, item)
-    base = item.anchor.meta("lite.base_commit")
-    report_result, report = _report_check(layout, attempt, item.anchor.bead_id)
-    results = [report_result]
-    removed: tuple[str, ...] = ()
-    if report is not None and report.status is reports.Status.BLOCKED:
-        results.append(checks.CheckResult("executor", False, (f"the executor reported a blocker: {report.summary}",)))
-    else:
-        clean = gitops.is_clean(workdir.value)
-        if isinstance(clean, Err):
-            return clean
-        if not clean.value:
-            results.append(checks.CheckResult("worktree-clean", False, ("the attempt left uncommitted changes",)))
-        changes = gitops.diff(workdir.value, base)
-        if isinstance(changes, Err):
-            return changes
-        saved = _write(layout.diff(attempt), changes.value.full)
-        if isinstance(saved, Err):
-            return saved
-        shared = cards.overlap(card.value, checks.added_lines(changes.value.unified))
-        log.info("card overlap for %s %s: %s lines copied from the card", item.anchor.bead_id, attempt.key, shared)
-        recorded = ctx.gc.set_metadata(item.anchor.bead_id, {f"lite.card_overlap.{attempt.key}": str(shared)})
-        if isinstance(recorded, Err):
-            return recorded
-        parsed = checks.parse_name_status(changes.value.name_status)
-        if not parsed:
-            results.append(checks.CheckResult("diff-scope", False, ("the attempt changed nothing",)))
-        results.append(checks.diff_scope(parsed, card.value.files))
-        results.append(checks.no_skip_markers(changes.value.unified))
-        removed = checks.removed_tests(parsed, changes.value.unified)
-        if removed:
-            log.info("%s %s removes tests: %s", item.anchor.bead_id, attempt.key, "; ".join(removed))
-        head = gitops.rev(workdir.value, "HEAD")
-        if isinstance(head, Err):
-            return head
-        results.append(checks.card_done(card.value.done_when, workdir.value, DONE_WHEN_TIMEOUT_SECONDS))
+    head = gitops.rev(workdir.value, "HEAD")
+    if isinstance(head, Err):
+        return head
+    state = donewhen.State(layout.attempt_dir(attempt) / "checks")
+    quick = _quick_checks(ctx, item, attempt, layout, workdir.value, card.value, head.value, state)
+    if isinstance(quick, Err):
+        return quick
+    results = list(quick.value.results)
+    removed = quick.value.removed
+    report = quick.value.report
+    if not quick.value.blocked:
+        spec = donewhen.Spec(head.value, card.value.done_when, workdir.value, DONE_WHEN_TIMEOUT_SECONDS)
+        waited = donewhen.await_result(state, spec, ctx.env.verify_wait_seconds)
+        if isinstance(waited, Err):
+            return waited
+        if waited.value is None:
+            log.info("done_when for %s %s still running", item.anchor.bead_id, attempt.key)
+            return Ok(Done(_still_running_text(state)))
+        results.append(waited.value)
         # done_when commands leave build products (__pycache__, coverage files)
         # that would make land refuse the worktree as dirty.
         residue = gitops.is_clean(workdir.value)

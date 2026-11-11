@@ -26,6 +26,7 @@ from litetools.result import Err, Ok, Result
 log = logging.getLogger(__name__)
 
 DRAIN_UNIT_KIND = "drain-unit-convoy"
+DEFAULT_VERIFY_WAIT_SECONDS = 8 * 60.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +41,9 @@ class Env:
         identities: Every name the claim hook may record as our assignee.
         route: ``GC_TEMPLATE``, the route our claims must carry, or empty.
         pack_dir: ``GC_PACK_DIR``.
+        verify_wait_seconds: How long one ``verify`` waits for ``done_when``
+            (``LITE_VERIFY_WAIT_SECONDS``, default 480: under an agent shell
+            tool call's ten minutes).
     """
 
     city: Path
@@ -49,6 +53,7 @@ class Env:
     identities: frozenset[str]
     route: str
     pack_dir: Path
+    verify_wait_seconds: float = DEFAULT_VERIFY_WAIT_SECONDS
 
 
 def load_env(environ: Mapping[str, str]) -> Result[Env, str]:
@@ -62,6 +67,13 @@ def load_env(environ: Mapping[str, str]) -> Result[Env, str]:
         missing.append("GC_SESSION_ID")
     if missing:
         return Err(f"missing environment: {', '.join(missing)}")
+    raw_wait = environ.get("LITE_VERIFY_WAIT_SECONDS", "").strip()
+    try:
+        verify_wait = float(raw_wait) if raw_wait else DEFAULT_VERIFY_WAIT_SECONDS
+    except ValueError:
+        return Err(f"LITE_VERIFY_WAIT_SECONDS is not a number: {raw_wait!r}")
+    if verify_wait < 0:
+        return Err(f"LITE_VERIFY_WAIT_SECONDS is negative: {raw_wait!r}")
     identities = frozenset(
         environ[n].strip()
         for n in ("BEADS_ACTOR", "GC_ALIAS", "GC_SESSION_ID", "GC_SESSION_NAME", "GC_AGENT")
@@ -76,6 +88,7 @@ def load_env(environ: Mapping[str, str]) -> Result[Env, str]:
             identities=identities,
             route=environ.get("GC_TEMPLATE", "").strip(),
             pack_dir=Path(environ["GC_PACK_DIR"]),
+            verify_wait_seconds=verify_wait,
         )
     )
 

@@ -15,8 +15,11 @@ the card to the printed path:
 - `files`: every file the change may create or touch, tests included. The
   executor may change nothing else.
 - `done_when`: shell commands, run from the worktree root, that pass only when
-  the work is done: the new or changed test by name, then the project's build,
-  lint and full test commands.
+  the work is done. When the bead lists its own done-when commands, use exactly
+  those. Otherwise use as few as prove it, usually one run of the project's
+  build tool that builds, lints and runs the full test suite (which includes
+  the new tests). Every command starts a fresh process, so a separate run per
+  test class repeats the whole build; on a large project each costs minutes.
 - `## Interfaces`: signatures and types only, no bodies.
 - `## Context`: quote the code the change depends on, exactly, with paths and
   line ranges, so the executor need not search. Quote what exists, never what

@@ -527,6 +527,69 @@ def test_verify_records_lines_copied_from_the_card(world: World) -> None:
     assert world.meta(ANCHOR)["lite.card_overlap.t1"] == "1/2"
 
 
+SHORT_WAIT = {"LITE_VERIFY_WAIT_SECONDS": "0.2"}
+
+
+def slow_card(world: World, before: str) -> str:
+    """A card whose done_when first runs ``before``, sleeps, then counts its runs."""
+    counter = world.tmp / "done_when_runs"
+    command = f"{before}sleep 2 && echo ran >> {counter} && grep -q fixed src/app.txt"
+    return CARD.replace('done_when = ["grep -q fixed src/app.txt"]', f"done_when = [{json.dumps(command)}]")
+
+
+def runs(world: World) -> int:
+    counter = world.tmp / "done_when_runs"
+    return len(counter.read_text().splitlines()) if counter.exists() else 0
+
+
+def checks_dir(world: World, key: str = "t1") -> Path:
+    return world.artifacts / "attempts" / key / "checks"
+
+
+def test_slow_done_when_leaves_the_step_open_and_a_second_verify_attaches(world: World) -> None:
+    sealed(world, slow_card(world, ""))
+    attempted(world, "t1", "fixed\n")
+    first = world.claim_and_run("s-ver-t1", "verify", "verify", tier="t1", env=SHORT_WAIT)
+    assert first.returncode == 0, first.stderr
+    assert "still running" in first.stdout and "Do not end your turn" in first.stdout
+    assert "gc.output_json" not in world.meta("s-ver-t1")
+    assert world.meta("s-ver-t1").get("lite.checks") != "passed"
+    second = world.run("verify")
+    assert second.returncode == 0, second.stderr
+    assert world.meta("s-ver-t1")["lite.checks"] == "passed"
+    assert "Every check passed" in second.stdout
+    assert runs(world) == 1
+
+
+def test_build_products_of_a_running_check_do_not_fail_worktree_clean(world: World) -> None:
+    sealed(world, slow_card(world, "touch residue.txt && "))
+    attempted(world, "t1", "fixed\n")
+    first = world.claim_and_run("s-ver-t1", "verify", "verify", tier="t1", env=SHORT_WAIT)
+    assert "still running" in first.stdout, first.stderr
+    second = world.run("verify")
+    assert second.returncode == 0, second.stderr
+    assert world.meta("s-ver-t1")["lite.checks"] == "passed"
+    assert not (world.worktree / "residue.txt").exists()
+
+
+def test_a_runner_that_died_without_a_result_is_started_again(world: World) -> None:
+    sealed(world, slow_card(world, ""))
+    attempted(world, "t1", "fixed\n")
+    first = world.claim_and_run("s-ver-t1", "verify", "verify", tier="t1", env=SHORT_WAIT)
+    assert "still running" in first.stdout, first.stderr
+    pid_file = checks_dir(world) / "runner.pid"
+    for _ in range(100):
+        if pid_file.exists():
+            break
+        subprocess.run(["sleep", "0.05"], check=True)
+    pid = int(pid_file.read_text())
+    os.killpg(os.getpgid(pid), 9)
+    second = world.run("verify")
+    assert second.returncode == 0, second.stderr
+    assert world.meta("s-ver-t1")["lite.checks"] == "passed"
+    assert runs(world) == 1
+
+
 def test_verdict_needs_passing_checks_and_a_reason_to_reject(world: World) -> None:
     sealed(world)
     attempted(world, "t1", "fixed\n")

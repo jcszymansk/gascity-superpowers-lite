@@ -305,6 +305,18 @@ The `verify` command runs every check in the reviewer's session, before the revi
 | `no-skip-markers` | the diff adds a skip or ignore marker |
 | `card-done` | any `done_when` command fails |
 
+`done_when` runs in a detached runner (`litetools/donewhen.py`), double-forked into its own
+session, with its state under `<attempt dir>/checks/`: what it checks (commit and commands), its
+pid, its log and, when done, its result. One `verify` waits for it at most eight minutes
+(`LITE_VERIFY_WAIT_SECONDS`), under the ten minutes an agent's shell tool call may last, and then
+reports that the checks still run without closing the step. The next `verify`, from the same
+session or a restarted one, attaches to the same run; a runner that died without a result is
+started again. The quick checks run once per attempt commit and are saved beside it, because
+once `done_when` starts, its build products would fail `worktree-clean` on a second `verify`.
+This exists because gc 1.5.1 drains a pool session that holds a claimed step while idle at its
+prompt for 90 seconds (its execution backstop), and that drain killed a reviewer waiting on a
+backgrounded `verify`: fnr-lka81.1's review restarted nine times in 45 minutes and never finished.
+
 Removed tests are not a check. A fix that deletes code also deletes that code's tests, so
 `verify` lists deleted test files and test declarations removed on net, and the reviewer accepts
 a removal only when the card asks for it or the diff deletes or replaces the code the test
