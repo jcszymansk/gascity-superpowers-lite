@@ -26,7 +26,9 @@ from litetools.result import Err, Ok, Result
 log = logging.getLogger(__name__)
 
 DRAIN_UNIT_KIND = "drain-unit-convoy"
-DEFAULT_VERIFY_WAIT_SECONDS = 8 * 60.0
+DEFAULT_VERIFY_WAIT_SECONDS = 100.0
+"""Under the two minutes an agent shell tool waits by default, so verify always
+returns in the foreground, whatever timeout the agent picks."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,8 +44,7 @@ class Env:
         route: ``GC_TEMPLATE``, the route our claims must carry, or empty.
         pack_dir: ``GC_PACK_DIR``.
         verify_wait_seconds: How long one ``verify`` waits for ``done_when``
-            (``LITE_VERIFY_WAIT_SECONDS``, default 480: under an agent shell
-            tool call's ten minutes).
+            (``LITE_VERIFY_WAIT_SECONDS``, default 100).
     """
 
     city: Path

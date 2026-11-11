@@ -1,4 +1,4 @@
-Check the attempt and review it. Run, with your shell tool's longest timeout:
+Check the attempt and review it. Run:
 
     gc superpowers-lite verify
 
@@ -7,7 +7,7 @@ in scope, no skip markers, every `done_when` command). If any fails, it rejects
 the attempt and closes this step itself; exit.
 
 The `done_when` commands run in the background and can take most of an hour.
-While they run, verify waits up to eight minutes and then says they are still
+While they run, verify waits under two minutes and then says they are still
 running: run it again at once, and keep doing so until it prints a result.
 Never end your turn while they run, and never leave verify in the background
 to wait for it: gc restarts a session that sits idle at its prompt while it

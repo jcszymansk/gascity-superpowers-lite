@@ -766,8 +766,8 @@ def _still_running_text(state: donewhen.State) -> str:
         [
             "The done_when checks are still running in the background; they survive this session.",
             f"Their log: {state.log_file}",
-            "Run `gc superpowers-lite verify` again now, with your shell tool's longest timeout,",
-            "and keep doing so until it prints a result. Do not end your turn while they run:",
+            "Run `gc superpowers-lite verify` again now, and keep doing so until it prints a",
+            "result. Do not end your turn while they run:",
             "gc restarts a session that sits idle at its prompt while it holds this step.",
         ]
     )
