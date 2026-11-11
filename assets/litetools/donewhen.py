@@ -9,7 +9,11 @@ session started. The next session claimed the step again and started the
 checks again, and so on for as long as anyone let it.
 
 So the checks run in a detached runner, double-forked into its own session,
-and record their state next to the attempt:
+and record their state next to the attempt. Leaving the session is not
+enough where tmux starts each pane in its own systemd scope: stopping the
+session stops the scope, and systemd kills every process in it. Where a user
+systemd manager answers, the runner is started through ``systemd-run --user
+--scope``, which moves it into a scope of its own.
 
     <attempt dir>/checks/
         run.json      what is being checked: commit, commands, workdir, timeout
@@ -27,8 +31,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
+import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -171,19 +178,20 @@ def start(state: State, spec: Spec) -> Result[None, str]:
         )
     except OSError as error:
         return Err(f"could not record the checks run in {state.root}: {error}")
-    log.info("starting the done_when runner for %s in %s", spec.head, spec.workdir)
+    launcher = scope_launcher(shutil.which, _probe)
+    log.info("starting the done_when runner for %s in %s (scope: %s)", spec.head, spec.workdir, bool(launcher))
     child = os.fork()
     if child == 0:
-        _detach_and_exec(state, spec.workdir)
+        _detach_and_exec(state, spec.workdir, launcher)
     os.waitpid(child, 0)
     return Ok(None)
 
 
-def _detach_and_exec(state: State, workdir: Path) -> None:
+def _detach_and_exec(state: State, workdir: Path, launcher: tuple[str, ...]) -> None:
     """In the forked child: leave the session, fork again and exec the runner.
 
     The second fork makes the runner an orphan at once, so it belongs to no
-    agent's process tree and survives that agent being stopped.
+    agent's process tree; ``launcher`` moves it out of the agent's cgroup.
     """
     try:
         os.setsid()
@@ -195,7 +203,8 @@ def _detach_and_exec(state: State, workdir: Path) -> None:
         os.dup2(devnull, 0)
         os.dup2(out, 1)
         os.dup2(out, 2)
-        os.execv(sys.executable, [sys.executable, str(_LITE_PY), "done-when-run", str(state.root)])
+        argv = [*launcher, sys.executable, str(_LITE_PY), "done-when-run", str(state.root)]
+        os.execv(argv[0], argv)
     finally:
         os._exit(127)
 
@@ -230,6 +239,38 @@ def run_detached(root: Path) -> int:
     )
     print(f"done-when-run: finished, {'passed' if outcome.passed else 'failed'}", flush=True)
     return 0
+
+
+SCOPE_PROBE_TIMEOUT_SECONDS = 10
+
+
+def scope_launcher(which: Callable[[str], str | None], probe: Callable[[list[str]], bool]) -> tuple[str, ...]:
+    """Return the command prefix that starts the runner in a systemd scope of its own.
+
+    Args:
+        which: Finds a program on PATH (``shutil.which``).
+        probe: Runs a command and reports whether it succeeded.
+
+    Returns:
+        The ``systemd-run`` prefix when a user manager can create scopes,
+        otherwise nothing, and the runner shares the caller's cgroup.
+    """
+    binary = which("systemd-run")
+    if binary is None:
+        log.info("no systemd-run on PATH; the done_when runner stays in this cgroup")
+        return ()
+    prefix = (binary, "--user", "--scope", "--quiet", "--collect", "--description=superpowers-lite done_when")
+    if not probe([*prefix, "true"]):
+        log.warning("systemd-run cannot create a user scope here; the done_when runner stays in this cgroup")
+        return ()
+    return prefix
+
+
+def _probe(argv: list[str]) -> bool:
+    try:
+        return subprocess.run(argv, capture_output=True, timeout=SCOPE_PROBE_TIMEOUT_SECONDS, check=False).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 def await_result(state: State, spec: Spec, budget_seconds: float) -> Result[checks.CheckResult | None, str]:

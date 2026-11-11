@@ -306,7 +306,10 @@ The `verify` command runs every check in the reviewer's session, before the revi
 | `card-done` | any `done_when` command fails |
 
 `done_when` runs in a detached runner (`litetools/donewhen.py`), double-forked into its own
-session, with its state under `<attempt dir>/checks/`: what it checks (commit and commands), its
+session and, where a user systemd manager answers, started through `systemd-run --user --scope`
+into a cgroup of its own. A new session was not enough: tmux built with systemd support starts
+each pane in a `tmux-spawn-*.scope`, stopping the session stops that scope, and systemd killed the
+runner with the pane. Its state lives under `<attempt dir>/checks/`: what it checks (commit and commands), its
 pid, its log and, when done, its result. One `verify` waits for it at most 100 seconds
 (`LITE_VERIFY_WAIT_SECONDS`), under the two minutes an agent's shell tool waits by default, and
 then reports that the checks still run without closing the step. A longer wait relied on the

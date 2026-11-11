@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from pathlib import Path
 
@@ -107,3 +108,27 @@ def test_a_runner_without_a_readable_record_fails(tmp_path: Path) -> None:
     assert donewhen.run_detached(st.root) == 1
     st.run_file.write_text(json.dumps({"head": "abc", "commands": "true"}))
     assert donewhen.run_detached(st.root) == 1
+
+
+def test_the_scope_launcher_is_used_only_where_systemd_run_works() -> None:
+    probed: list[list[str]] = []
+
+    def probe_ok(argv: list[str]) -> bool:
+        probed.append(argv)
+        return True
+
+    prefix = donewhen.scope_launcher(lambda name: f"/bin/{name}", probe_ok)
+    assert prefix[:3] == ("/bin/systemd-run", "--user", "--scope")
+    assert probed == [[*prefix, "true"]]
+    assert donewhen.scope_launcher(lambda name: None, probe_ok) == ()
+    assert donewhen.scope_launcher(lambda name: f"/bin/{name}", lambda argv: False) == ()
+
+
+def test_a_scoped_runner_leaves_the_callers_cgroup(tmp_path: Path) -> None:
+    if not donewhen.scope_launcher(shutil.which, donewhen._probe):
+        pytest.skip("no user systemd manager here")
+    st = state(tmp_path)
+    out = tmp_path / "cgroup"
+    waited = donewhen.await_result(st, spec(tmp_path, commands=(f"cat /proc/self/cgroup > {out}",)), 30)
+    assert isinstance(waited, Ok) and waited.value is not None and waited.value.passed
+    assert out.read_text() != Path("/proc/self/cgroup").read_text()
