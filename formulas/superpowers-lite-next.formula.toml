@@ -2,7 +2,8 @@ description = """
 What follows a verified attempt, bonded by the verify step's on_complete with
 `action` set to t1, t2, t3 or land and `round` to the attempt's round:
 
-  t1    the T1 retry: attempt + verify, which bonds this formula again
+  t1    the T1 retry, or the first attempt on the next card: attempt +
+        verify, which bonds this formula again
   t2    attempt + verify, which bonds this formula again
   t3    human gate, approval, attempt + verify, which bonds this formula again
   land  land + close the work bead

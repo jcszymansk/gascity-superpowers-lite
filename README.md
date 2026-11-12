@@ -92,29 +92,34 @@ gc sling <rig>/superpowers-lite.operator <convoy> --on superpowers-lite-work
 Each bead becomes one item, run by the pack's own agents, each step in a fresh session:
 
 1. `operator` creates the item's worktree at `$GC_CITY/.gc/worktrees/<rig>/<bead>`.
-2. `card-cutter` turns the bead into one task card: the files the change may touch (paths or
+2. `card-cutter` turns the bead into task cards: the files the change may touch (paths or
    `*`/`**` patterns, any number; files an attempt changes beyond them go to the reviewer), the existing
    code it depends on, numbered steps, and `done_when` commands that pass only when the work is
-   done. A card holds no implementation or test code. The validator allows code blocks only in
+   done. A card is sized by the design it must settle, typically half a day of a competent
+   developer's work once settled, not by time or file count. A bead larger than that is cut into
+   up to 10 cards, done in order; `--blocked` (`lite.result = uncuttable`) is for a bead that is
+   unclear or needs a human decision. A card holds no implementation or test code. The validator allows code blocks only in
    `## Interfaces` (up to 40 lines of signatures) and `## Context`, whose lines must exist in the
    repository. The checklist for the card's kind (`bugfix`
    or `tdd-feature`, from `assets/kinds/`) is then pasted in. `cut-card-start` prints a worked
    example card (`assets/templates/card-example.md`), and the step text keeps the cutter to the
    bead and the worktree at `HEAD`, because cutters otherwise go looking for earlier cards and
    solutions on disk.
-3. `executor-t1` does the card in the worktree. The pack command it finishes with commits the work,
+3. `executor-t1` does the first card in the worktree. The pack command it finishes with commits the work,
    with a `Bead: <id>` trailer.
 4. `card-reviewer` runs the checks, then reviews the diff against the card. The checks fail an
-   attempt that leaves uncommitted changes, changes nothing, touches a file outside the card,
-   deletes or skips a test, or fails a `done_when` command.
-5. An approved attempt lands. A rejected T1 attempt is retried once by `executor-t1`, starting
+   attempt whose report is missing, whose executor reported a blocker, or that leaves uncommitted
+   changes, changes nothing, adds a skip marker or fails a `done_when` command. Files outside the
+   card and removed tests are listed for the reviewer to judge.
+5. An approved attempt on a card with cards after it starts the next card at T1, from the
+   approved commit. An approved attempt on the last card lands. A rejected T1 attempt is retried once by `executor-t1`, starting
    from the rejected attempt with its findings, because most T1 rejections need a small fix, not
    a stronger model. An attempt whose executor reported a blocker skips the retry. A rejected
-   retry escalates: the worktree is reset to its base and `executor-t2` gets the card plus the
+   retry escalates: the worktree is reset to where the card started and `executor-t2` gets the card plus the
    findings and diff of the failed attempt. A rejected T2
    attempt mails `human` and waits for approval of a T3 attempt (see "Approving a T3 attempt").
    A rejected T3 attempt fails the item.
-6. `operator` lands the attempt on the item's target branch and closes the bead.
+6. `operator` lands every card's work on the item's target branch at once and closes the bead.
 
 The target branch is the bead's `target` metadata, else the convoy's, else `lite/<bead id>`. The
 default branch is never a target; merging stays a human step. The worktree starts from the target
@@ -126,18 +131,23 @@ with their own `lite/<id>` targets need no ordering.
 
 A failure ends the item without sending agents to steps that can only refuse. The item's steps
 form one gc scope with `gc.on_fail = "abort_scope"`: when one closes failed (a worktree that
-cannot be prepared, an uncuttable card, a blocked verify), gc skips the steps still waiting,
+cannot be prepared, an uncuttable bead, a blocked verify), gc skips the steps still waiting,
 including those verify bonded at runtime, and the item fails. A failed item does not stop the
 drain, but its `blocks` successors do not run on a target that lacks it: prepare-worktree fails
 an item whose predecessor is not closed, or closed with a `lite.result` other than `landed`, and
 records `lite.result = skipped`. A predecessor a human closed without lite counts as done.
 
-The work bead records the outcome: `lite.kind`, one `lite.attempt.<attempt>` entry per attempt
-(`t1`, the retry `t1.2`, `t2`, `t3`; `approved` or the check or review finding that rejected
-it), `lite.last_rejected`, `lite.passed_tier`, `lite.card_overlap.<attempt>` (how many of the
-attempt's added lines of 12 or more characters appear verbatim in the card, such as `4/333`), and
-`lite.result` (`landed`, `blocked`, `uncuttable`, `land-refused` or `skipped`). Cards, reports, diffs and
-findings are kept under `$GC_CITY/.gc/artifacts/<rig>/superpowers-lite/<bead>/`.
+The work bead records the outcome: `lite.cards` and the current `lite.card`, `lite.kind` (each
+card's kind once, comma-separated), one `lite.attempt.<attempt>` entry per attempt (`t1`, the
+retry `t1.2`, `t2`, `t3`; `approved` or the check or review finding that rejected it),
+`lite.last_rejected`, `lite.passed_tier`, `lite.card_overlap.<attempt>` (how many of the attempt's
+added lines of 12 or more characters appear verbatim in the card, such as `4/333`),
+`lite.files_touched.<attempt>`, and `lite.result` (`landed`, `blocked`, `uncuttable`,
+`land-refused` or `skipped`). An item of several cards keeps the per-card entries under
+`lite.card.<n>.` instead (`lite.card.2.attempt.t1`, `lite.card.2.passed_tier`, and
+`lite.card.<n>.base_commit` for where card n starts), and its `lite.passed_tier` is the highest tier
+any card needed. Drafts, cards, reports, diffs and findings are kept under
+`$GC_CITY/.gc/artifacts/<rig>/superpowers-lite/<bead>/` (`drafts/<n>.md`, `cards/<n>/`).
 
 ### Approving a T3 attempt
 

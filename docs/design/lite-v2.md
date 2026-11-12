@@ -47,7 +47,7 @@ and a stranger who imports the pack can bind whatever they have.
 | D1 | v2 is the next version of superpowers-lite, not a separate pack. It keeps the superpowers import for now (see "Relation to superpowers"). |
 | D2 | Lite ships its own agent for every step it controls, each bound to a slot. It stops routing to `superpowers.*` and `gc.*` role agents, which a pack cannot bind to its slots. |
 | D3 | Escalation from T1 to T2 runs automatically. Escalation to T3 waits at a human gate until the cost per item is known from calibration. |
-| D4 | An escalated attempt starts from a reset worktree. It receives the failed diff and the check output as context, not as a starting point. |
+| D4 | An escalated attempt starts from a reset worktree, at the commit where its card starts. It receives the failed diff and the check output as context, not as a starting point. |
 | D5 | Hooks: patch `install_agent_hooks` per city until gc installs hooks for an agent's resolved harness; draft that upstream issue together with a rig-level provider alias. Lite never files them; the owner does. |
 
 ## Pipeline
@@ -58,13 +58,13 @@ and a stranger who imports the pack can bind whatever they have.
 | requirements | brainstorm and spec loops, human approval | same, on `lite-plan` |
 | plan | `writing-plans` | same, with one rule added: every task fits on one card |
 | plan-review | superpowers review loop | same, plus one question: can each task go to a cheap model exactly as written? |
-| decompose | scope-only task beads pointing into the plan | **one card per task** (see "Task card") |
+| decompose | scope-only task beads pointing into the plan | **one card per task**, more when a task needs them (see "Task card") |
 | implement, per item | TDD implementer, one reviewer, one fix round | **tiered loop** (see "Per-item loop") |
 | review | code review and gap-analysis fan-out | same, on `lite-review` and `lite-review-cross` |
 | finalize, commit-docs, publish | superpowers and lite | same |
 
-`superpowers-lite-work` keeps its shape: each work bead is converted into a card, then runs the
-same per-item loop. A well-written bug bead is already close to a card, so this is the cheapest
+`superpowers-lite-work` keeps its shape: each work bead is cut into one or more cards, which run
+the same per-item loop in order. A well-written bug bead is already close to a card, so this is the cheapest
 route through the pack and the first one to build.
 
 ## Model slots
@@ -187,8 +187,9 @@ Prompts for these agents follow four rules:
 
 ## Task card
 
-`card-cutter` writes one card per task to `<artifact_root>/cards/<task id>.md`, with front matter
-validated against a `lite.card.v1` schema. Step text in gc is limited to 4096 bytes, so the card
+`card-cutter` writes one or more cards per work bead, as numbered drafts
+(`drafts/1.md`, `drafts/2.md`, ...), and `cut-card-finish` seals card n to `cards/<n>/card.md`
+under the item's artifact directory. Front matter is validated against a `lite.card.v1` schema. Step text in gc is limited to 4096 bytes, so the card
 never travels in a step description.
 
 Phase 1 cards use TOML front matter between `+++` lines (`schema = "lite.card.v1"`, `id`,
@@ -211,9 +212,11 @@ a `lite.cards` list).
 | `kind` | One of the task kinds below. |
 | `checklist` | The kind's checklist, pasted by a script, not by the model. |
 
-Size: about an hour of human work, judged by effort and risk, never by file count. A rename can
-touch hundreds of files and stay one easy card, and a hard fix can sit in one file. The first
-format capped `files` at 8 exact paths; it refused beads that an attempt handles easily (ntrecv
+Size: a card is as large as the design it can settle. It holds one coherent change and its
+tests, typically half a day of a competent developer's work once the design is settled, so the
+executor only implements. Time is a guide, never a rule, and file count is not one at all: a
+rename can touch hundreds of files and stay one easy card, and a hard fix can sit in one file.
+See "Card size" for the evidence. The first format capped `files` at 8 exact paths; it refused beads that an attempt handles easily (ntrecv
 nt-di49w.2, 11 files) and failed any attempt that needed a file the cutter could not foresee, so
 it was dropped on 2026-11-12. Verify records `lite.files_touched.<tier>` per attempt, to see
 whether size predicts escalation. The schema check rejects a card without every section;
@@ -230,6 +233,57 @@ lines that are not in the repository. An 8 KiB limit on the rest of the card was
 the card, which shows copied code however the card wrote it. `card-cutter` runs on `lite-plan`
 in phase 1 for safety; moving it to a cheaper slot is a calibration question.
 
+### Card size
+
+Until 2026-11-12 a card was "about an hour of human work", and a larger bead failed as
+`uncuttable`. Two kinds of evidence say that was too small.
+
+- **Lite's own runs.** Of 39 items landed in gcexp by 2026-11-12, 37 passed at T1 on Haiku (3 of
+  them on the T1 retry). The two that reached T2 did so for reasons no model could change:
+  fnr-5pfxs hit the old `tests-intact` check, and smt-rl47 was rejected for missing docstrings.
+  No attempt escalated because the work was too hard for its tier, so the cards never found T1's
+  limit. Meanwhile the cutter is the main expense (105,104 output tokens on Opus for smt-rl47's
+  card against 74,475 for its executor), and small cards pay that cost per small change.
+- **Published measurements.** METR's time horizons (Time Horizon 1.1 data,
+  `metr.org/assets/benchmark_results_1_1.yaml`) put Claude 4 Opus at about 100 minutes of human
+  work at 50% success and 20 minutes at 80%; METR has measured no Haiku or DeepSeek Flash. Haiku
+  4.5 scores 73.3% on SWE-bench Verified, level with Sonnet 4's 72.7% (Anthropic, 2025-10). No
+  public benchmark for Haiku 5.5 was found. DeepSeek V4.1 Flash reports 74.2 on DeepSWE on its
+  own scaffold, but independent tests found it weaker than its scores. METR's tasks leave the
+  design to the model, and a card has settled it, so a model working from a card handles more
+  human time than its horizon. METR's error bars are also about 2x either way, and lite needs
+  better than 50% success.
+
+So the size rule moved from time to design: half a day once settled is a guide, and the bound is
+what one card can settle. Calibration should raise card size until a real share of T1 attempts
+(around 10 to 20%) escalate for capability, sized for the weakest model bound to `lite-t1`.
+
+### Splitting a bead
+
+A bead that needs more design than one card can carry is cut into up to 10 cards, done in order
+in the item's worktree; `--blocked` (`lite.result = uncuttable`) is left for beads that are
+unclear or need a human decision. Cards are sealed together, so a cut either yields every card or
+none. Each card climbs the ladder on its own, starting at T1; each must pass its own `done_when`,
+and its Out of scope names what later cards do.
+
+- The anchor records `lite.cards` and the current `lite.card`. Steps pin the card they serve in
+  their own `lite.card`, so a verify retried after the anchor moved on stays on its card.
+- An approval with cards left records `lite.card.<n+1>.base_commit` (the approved attempt's
+  commit), advances `lite.card` and bonds a T1 attempt on the next card through the same
+  `superpowers-lite-next` fragment a retry uses; the formulas did not change. Only the last
+  card's approval sets `lite.passed_tier` (the highest tier any card needed), so `land` moves the
+  target once, with every card or with none.
+- Retries and escalations reset to the card's base, and each card's diff, overlap and file count
+  cover that card alone. A split item keeps per-card metadata under `lite.card.<n>.`; an item of
+  one card keeps the plain `lite.` keys, so single-card records read as before.
+- An item cut before the split has no `lite.cards` and keeps its one card at the artifact root.
+
+The cards share one item and one landing, instead of becoming child beads with `blocks` edges:
+creating beads mid-run would need the drain to pick them up and the edges kept in landing order,
+which is what makes FreeNetRadio's drain chains fragile.
+
+### Phase 2 and code in plans
+
 This conflicts with phase 2's mechanical cutting: a superpowers plan holds complete code in every
 step, and pasting it into a card would bring the same problem back. Phase 2 has to choose between
 plans without code and cards that leave it out.
@@ -244,7 +298,7 @@ counts. Phase 1 ships `bugfix` and `tdd-feature`; phase 3 adds the kinds that es
 ## Per-item loop
 
 ```
-card ─► executor-t1 ─► checks ─┬─ pass ─► card-reviewer ─┬─ approve ─► land
+card ─► executor-t1 ─► checks ─┬─ pass ─► card-reviewer ─┬─ approve ─► land, or t1 on the next card
                                │                        └─ reject ─┐
                                └─ fail ────────────────────────────┤
                                                                    ▼
@@ -265,7 +319,7 @@ card ─► executor-t1 ─► checks ─┬─ pass ─► card-reviewer ─┬
   beads. The item formula runs prepare, cut-card, the T1 attempt and a verify step. Verify (run by
   `card-reviewer`, which first runs the checks through a pack command) writes its structured
   output as `{"next": [{"action": "land", "round": "1"}]}`, or `t1` with round 2 for the T1
-  retry, or `t2`, or `t3`, or `blocked`. Its `on_complete` bonds `superpowers-lite-next` with
+  retry, `t1` with round 1 for the next card, or `t2`, or `t3`, or `blocked`. Its `on_complete` bonds `superpowers-lite-next` with
   that action and round. `superpowers-lite-next` uses `condition` on
   the action to contain either the human approval gate, the attempt and another verify (which
   bonds `superpowers-lite-next` again), or only `land`. A live run on gc 1.5.1 confirmed it
@@ -288,9 +342,10 @@ card ─► executor-t1 ─► checks ─┬─ pass ─► card-reviewer ─┬
   about twice the beads (see "Open questions").
 - The T3 approval (D3) is a `human` gate, one of gc's built-in gate types. The approval step
   needs `gc.run_target` set to `operator`; without one it stays open with no owner.
-- Every attempt starts from the item's base commit (D4). The `gc.continuation_group` of v1 does
+- Every first attempt at a tier starts from its card's base commit (D4): the item's base for the
+  first card, the previous card's approved commit for the others. The `gc.continuation_group` of v1 does
   not span attempts, since each runs on a different agent.
-- The item records `lite.kind`, the tier that passed or `blocked`, and per failed attempt the
+- The item records `lite.kind`, the number of cards, the tier that passed or `blocked`, and per failed attempt the
   check or review finding that failed it. Calibration and learnings read these.
 - `land` and `close-anchor` are pack commands run by `operator`. `land` is v1's compare-and-swap
   block ported to Python; it no longer reads a task review, since it requires the

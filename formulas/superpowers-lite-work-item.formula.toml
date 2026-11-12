@@ -1,8 +1,10 @@
 description = """
-One work bead through the lite v2 loop: prepare its worktree, cut one task
-card, run a T1 attempt and verify it. The verify step's output picks what
-follows (superpowers-lite-next): land, a T2 attempt, a human-approved T3
-attempt, or nothing when the item is blocked. Drained by superpowers-lite-work.
+One work bead through the lite v2 loop: prepare its worktree, cut it into one
+or more task cards, run a T1 attempt on the first card and verify it. The
+verify step's output picks what follows (superpowers-lite-next): a T1 retry,
+a T2 attempt, a human-approved T3 attempt, a T1 attempt on the next card,
+land once the last card passes, or nothing when the item is blocked. Drained
+by superpowers-lite-work.
 """
 formula = "superpowers-lite-work-item"
 version = 2
@@ -17,7 +19,7 @@ description_file = "../assets/workflows/superpowers-lite-work-item/prepare-workt
 
 [[steps]]
 id = "cut-card"
-title = "Cut the task card for {{issue}}"
+title = "Cut the task cards for {{issue}}"
 needs = ["prepare-worktree"]
 metadata = { "gc.run_target" = "superpowers-lite.card-cutter", "lite.step" = "cut-card", "gc.scope_ref" = "item", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope" }
 description_file = "../assets/workflows/superpowers-lite-work-item/cut-card.md"
@@ -30,7 +32,7 @@ metadata = { "gc.run_target" = "superpowers-lite.executor-t1", "lite.step" = "at
 description_file = "../assets/workflows/superpowers-lite-work-item/attempt.md"
 
 # The verdict, not a model, decides what follows: verify writes
-# gc.output_json = {"next": [{"action": "land" | "t2"}]} and this bonds one
+# gc.output_json = {"next": [{"action": "land" | "t1" | "t2" | "t3"}]} and this bonds one
 # superpowers-lite-next fragment per entry. land lives in the fragment because
 # an authored step cannot need the generated verify-t1-fanout control.
 [[steps]]

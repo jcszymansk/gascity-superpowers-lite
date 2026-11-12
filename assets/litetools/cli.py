@@ -34,7 +34,7 @@ def _parser() -> argparse.ArgumentParser:
     runner = sub.add_parser("done-when-run", help=argparse.SUPPRESS)
     runner.add_argument("state_dir")
     finish_card = sub.add_parser("cut-card-finish")
-    finish_card.add_argument("--blocked", help="the work bead cannot become a card, and why")
+    finish_card.add_argument("--blocked", help="the work bead cannot become cards (unclear, or needs a human decision), and why")
     finish = sub.add_parser("attempt-finish")
     finish.add_argument("--summary", help="what the attempt changed and why")
     finish.add_argument("--blocked", help="why the card cannot be done as written")
