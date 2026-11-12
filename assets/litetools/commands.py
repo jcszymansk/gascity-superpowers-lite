@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import re
+import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -397,6 +398,16 @@ def cut_card_start(ctx: Ctx) -> Outcome:
     if isinstance(example, Err):
         return example
     layout = _layout(ctx, item)
+    # The artifact directory belongs to the work bead, so a bead slung again
+    # finds the drafts of its earlier run there. A restarted cutter session runs
+    # this again on the same step and must keep the drafts it already wrote.
+    if item.step.meta("lite.cut_started") != "true":
+        cleared = _clear_drafts(layout)
+        if isinstance(cleared, Err):
+            return cleared
+        marked = ctx.gc.set_metadata(item.step.bead_id, {"lite.cut_started": "true"})
+        if isinstance(marked, Err):
+            return marked
     kinds = ", ".join(kind.value for kind in cards.Kind)
     return Ok(
         Done(
@@ -424,6 +435,19 @@ def cut_card_start(ctx: Ctx) -> Outcome:
             )
         )
     )
+
+
+def _clear_drafts(layout: Layout) -> Result[None, str]:
+    """Remove the drafts an earlier run of the same work bead left behind."""
+    try:
+        if layout.drafts.is_dir():
+            stale = sorted(layout.drafts.iterdir())
+            if stale:
+                log.info("removing %d stale drafts from %s", len(stale), layout.drafts)
+            shutil.rmtree(layout.drafts)
+    except OSError as error:
+        return Err(f"could not clear the old drafts in {layout.drafts}: {error}")
+    return Ok(None)
 
 
 def _draft_paths(layout: Layout) -> Result[list[Path], list[str]]:

@@ -1209,3 +1209,19 @@ def test_an_item_cut_before_cards_were_numbered_keeps_its_root_card(world: World
     assert (world.artifacts / "attempts" / "t1" / "report.md").exists()
     assert not (world.artifacts / "cards").exists()
     assert "lite.card" not in world.meta("s-ver-t1")
+
+
+def test_cut_card_start_clears_drafts_of_an_earlier_run_but_not_its_own(world: World) -> None:
+    prepared(world)
+    world.draft(2).write_text("left by an earlier run")
+    started = world.claim_and_run("s-cut", "cut-card", "cut-card-start")
+    assert started.returncode == 0, started.stderr
+    assert not (world.artifacts / "drafts").exists()
+    assert world.meta("s-cut")["lite.cut_started"] == "true"
+    world.draft(1).write_text(CARD)
+    again = world.run("cut-card-start")
+    assert again.returncode == 0, again.stderr
+    assert world.draft(1).read_text() == CARD
+    finished = world.run("cut-card-finish")
+    assert finished.returncode == 0, finished.stderr
+    assert world.meta(ANCHOR)["lite.cards"] == "1"
