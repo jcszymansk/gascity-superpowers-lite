@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
 import tomllib
 from dataclasses import dataclass
 from enum import Enum
@@ -260,6 +261,90 @@ def _relative_path_error(path: str) -> str | None:
     return None
 
 
+_GREP_PROGRAMS = frozenset({"grep", "egrep", "fgrep"})
+_SHELL_OPERATORS = frozenset({"|", "||", "&&", ";", "&", "(", ")", "!"})
+_GREP_OPTIONS_WITH_ARGUMENT = frozenset("efmABCdD")
+_SKIP_BINARY_LONG = frozenset({"--binary-files=without-match"})
+_RECURSIVE_LONG = frozenset({"--recursive", "--dereference-recursive", "--directories=recurse"})
+
+
+def _grep_calls(command: str) -> list[list[str]]:
+    """Return the arguments of each grep in a shell command, ``git grep`` marked by a leading ``git``.
+
+    The command is split on the shell's control operators; a command too
+    malformed for ``shlex`` falls back to splitting on whitespace.
+    """
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars="|&;()")
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        tokens = command.split()
+    calls: list[list[str]] = []
+    current: list[str] | None = None
+    for index, token in enumerate(tokens):
+        if token in _SHELL_OPERATORS:
+            current = None
+            continue
+        if current is not None:
+            current.append(token)
+            continue
+        name = token.rsplit("/", 1)[-1]
+        previous = tokens[index - 1] if index > 0 else ""
+        if name in _GREP_PROGRAMS and previous != "git":
+            current = []
+            calls.append(current)
+        elif name == "grep" and previous == "git":
+            current = ["git"]
+            calls.append(current)
+    return calls
+
+
+def _greps_binaries(arguments: list[str]) -> bool:
+    """Return True when a grep with these arguments searches directories and also binary files."""
+    recursive = arguments[:1] == ["git"]
+    skips_binary = False
+    take_argument = False
+    for argument in arguments:
+        if take_argument:
+            take_argument = False
+            if argument == "recurse":
+                recursive = True
+            continue
+        if argument == "--":
+            break
+        if argument.startswith("--"):
+            recursive = recursive or argument in _RECURSIVE_LONG
+            # --include limits the search to named (text) files, so binaries are never read.
+            skips_binary = skips_binary or argument in _SKIP_BINARY_LONG or argument.startswith("--include=")
+            continue
+        if argument.startswith("-") and len(argument) > 1:
+            flags = argument[1:]
+            for position, flag in enumerate(flags):
+                if flag in "rR":
+                    recursive = True
+                elif flag == "I":
+                    skips_binary = True
+                elif flag in _GREP_OPTIONS_WITH_ARGUMENT:
+                    take_argument = position == len(flags) - 1
+                    break
+    return recursive and not skips_binary
+
+
+def _binary_grep_errors(commands: tuple[str, ...]) -> list[str]:
+    """Refuse a done_when command whose recursive grep would also search binary files.
+
+    Repositories keep prebuilt binaries (old APKs, images, archives) that hold
+    the very strings a "these are gone" check looks for, so such a check can
+    never pass: FreeNetRadio fnr-lka81.3 failed on APKs under app/store/.
+    """
+    return [
+        f"done_when command greps directories without -I, so it also searches binary files: {command}"
+        for command in commands
+        if any(_greps_binaries(call) for call in _grep_calls(command))
+    ]
+
+
 def _string_list(meta: dict[str, object], key: str, limit: int | None) -> Result[tuple[str, ...], str]:
     value = meta.get(key)
     if not isinstance(value, list) or not value:
@@ -318,6 +403,10 @@ def parse(text: str, *, require_checklist: bool) -> Result[Card, list[str]]:
     done_when = _string_list(meta, "done_when", MAX_DONE_WHEN)
     if isinstance(done_when, Err):
         errors.append(done_when.error)
+    elif not require_checklist:
+        # Checked when the cutter submits a card, not on every read of a sealed one:
+        # a card sealed before this rule must keep working.
+        errors.extend(_binary_grep_errors(done_when.value))
 
     sections, section_errors = _sections(body)
     errors.extend(section_errors)

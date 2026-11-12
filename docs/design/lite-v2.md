@@ -346,6 +346,12 @@ touched paths no entry covers, the executor says in its report why it needed eac
 accepts one only when the change needs it and the card's Out of scope does not rule it out. Until
 2026-11-12 any such file failed a `diff-scope` check.
 
+A recursive grep in `done_when` must skip binary files (`-I`, `--binary-files=without-match` or
+an `--include=` glob), or `cut-card-finish` refuses the card. FreeNetRadio keeps old APKs under
+`app/store/`, and fnr-lka81.3's check that the removed strings were gone matched them, so no
+attempt could pass. The rule applies when a card is cut, not when a sealed card is read, so a
+card sealed earlier keeps working.
+
 Card validity is checked when the card is cut: `cut-card-finish` refuses an invalid card and the
 step stays open until the cutter fixes it. After the checks, `verify` resets the worktree to the
 attempt commit, because `done_when` commands leave build products behind (a Python test run

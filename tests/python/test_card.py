@@ -316,3 +316,59 @@ def test_the_template_obeys_the_rule() -> None:
     text = (PACK / "assets" / "templates" / "card.md").read_text(encoding="utf-8")
     body = text.split("+++", 2)[2]
     assert isinstance(card.parse(cutter_card(body=body), require_checklist=False), Ok)
+
+
+def with_done_when(command: str) -> str:
+    entry = command.replace("\\", "\\\\").replace('"', '\\"')
+    return cutter_card(front=FRONT.replace('done_when = ["cargo test --test parse"]', f'done_when = ["{entry}"]'))
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        '! grep -rn "old_label" app common',
+        "grep -R old_label .",
+        "grep --recursive old_label src",
+        "grep -n -r old_label src",
+        "grep -d recurse old_label src",
+        "./gradlew check && ! grep -rln old_label app",
+        "git grep -n old_label",
+        "! /usr/bin/egrep -r 'a|b' app",
+    ],
+)
+def test_a_recursive_grep_without_I_is_refused(command: str) -> None:
+    errors = errors_of(card.parse(with_done_when(command), require_checklist=False))
+    assert errors == [f"done_when command greps directories without -I, so it also searches binary files: {command}"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        '! grep -rnI "old_label\\|old_id" --exclude-dir=build app common',
+        "grep -rn --binary-files=without-match old_label app",
+        "grep -I -r old_label src",
+        '! grep -rn "oldName" --include=*.kt --exclude-dir=build .',
+        "git grep -I -n old_label",
+        "grep -n old_label app/src/main/res/values/strings.xml",
+        "grep -e -r src/file.txt",
+        "rg -n old_label app",
+        "cargo test --test parse",
+    ],
+)
+def test_greps_that_skip_binaries_or_search_files_are_accepted(command: str) -> None:
+    assert isinstance(card.parse(with_done_when(command), require_checklist=False), Ok)
+
+
+def test_an_unparseable_command_still_gets_the_grep_rule() -> None:
+    command = "grep -r 'unclosed app"
+    errors = errors_of(card.parse(with_done_when(command), require_checklist=False))
+    assert any("without -I" in e for e in errors)
+
+
+def test_a_card_sealed_before_the_rule_still_parses() -> None:
+    sealed = card.seal(cutter_card(), "- [ ] keep it simple")
+    assert isinstance(sealed, Ok), sealed
+    legacy = sealed.value.replace('done_when = ["cargo test --test parse"]', 'done_when = ["grep -rn old_label app"]')
+    assert legacy != sealed.value
+    assert isinstance(card.parse(legacy, require_checklist=True), Ok)
+    assert isinstance(card.seal(with_done_when("grep -rn old_label app"), "- [ ] keep it simple"), Err)

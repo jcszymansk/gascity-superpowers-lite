@@ -25,6 +25,9 @@ the card to the printed path:
   build tool that builds, lints and runs the full test suite (which includes
   the new tests). Every command starts a fresh process, so a separate run per
   test class repeats the whole build; on a large project each costs minutes.
+  A recursive grep needs `-I` (or `--include=` globs): repositories keep
+  prebuilt binaries that still hold the strings a "these are gone" check looks
+  for, and a card that greps them is refused.
 - `## Interfaces`: signatures and types only, no bodies.
 - `## Context`: quote the code the change depends on, exactly, with paths and
   line ranges, so the executor need not search. Quote what exists, never what
