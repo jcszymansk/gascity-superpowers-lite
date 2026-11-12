@@ -4,7 +4,14 @@
 
     t1 ──reject──► t1 retry ──reject──► t2 ──reject──► (human gate) t3 ──reject──► blocked
      │   (blocked ─┼──────────────────► t2)
-     └──approve────┴──approve───────────┴──approve─────────────────────┴──approve──► land
+     └──approve────┴──approve───────────┴──approve─────────────────────┴──approve──┐
+                                                                                    ▼
+                                         another card left? ── yes ──► t1 on the next card
+                                                             └─ no ───► land
+
+An item whose bead was cut into several cards climbs the ladder once per card,
+in card order; every card starts again at t1. Only the last card's approval
+lands, so the target branch receives the item's cards together or not at all.
 
 A rejected T1 attempt gets one retry on the same tier, which starts from the
 rejected attempt and fixes what its findings name, because most T1 rejections
@@ -24,6 +31,7 @@ import json
 import re
 from dataclasses import dataclass
 from enum import Enum
+from typing import Iterable
 
 from litetools.result import Err, Ok, Result
 
@@ -74,6 +82,13 @@ class Attempt:
     def key(self) -> str:
         """The attempt's name in metadata and artifact paths: ``t1``, ``t1.2``."""
         return self.tier.value if self.round == 1 else f"{self.tier.value}.{self.round}"
+
+
+def highest(tiers: Iterable[Tier]) -> Result[Tier, str]:
+    """Return the most expensive of ``tiers``: the tier an item of several cards passed at."""
+    order = list(Tier)
+    ranked = sorted(tiers, key=order.index)
+    return Ok(ranked[-1]) if ranked else Err("no tiers to rank")
 
 
 def first_attempt(tier: Tier) -> Attempt:
@@ -129,7 +144,7 @@ def _next(action: Action, attempt: Attempt | None) -> Decision:
     return Decision(action, attempt, "pass", json.dumps({"next": [{"action": action.value, "round": rounds}]}))
 
 
-def decide(attempt: Attempt, verdict: Verdict, retryable: bool) -> Decision:
+def decide(attempt: Attempt, verdict: Verdict, retryable: bool, last_card: bool) -> Decision:
     """Return the decision for ``attempt`` after ``verdict``.
 
     Args:
@@ -137,8 +152,12 @@ def decide(attempt: Attempt, verdict: Verdict, retryable: bool) -> Decision:
         verdict: Approve or reject.
         retryable: False when the executor reported a blocker, which a retry
             by the same model would hit again.
+        last_card: False when the item has cards after the one ``attempt``
+            served, so an approval moves on to the next card instead of landing.
     """
     if verdict is Verdict.APPROVE:
+        if not last_card:
+            return _next(Action.T1, first_attempt(Tier.T1))
         return _next(Action.LAND, None)
     if retryable and attempt.round <= RETRIES.get(attempt.tier, 0):
         return _next(Action(attempt.tier.value), Attempt(attempt.tier, attempt.round + 1))

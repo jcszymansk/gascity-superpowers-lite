@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from litetools.ladder import Action, Attempt, RETRIES, Tier, Verdict, attempt_of, decide, first_attempt, parse_attempt
+from litetools.ladder import Action, Attempt, RETRIES, Tier, Verdict, attempt_of, decide, first_attempt, highest, parse_attempt
 from litetools.result import Err, Ok
 
 
@@ -12,22 +12,36 @@ def next_of(output_json: str) -> list[dict[str, str]]:
 
 
 @pytest.mark.parametrize("attempt", [Attempt(Tier.T1, 1), Attempt(Tier.T1, 2), Attempt(Tier.T2, 1), Attempt(Tier.T3, 1)])
-def test_approval_always_lands(attempt: Attempt) -> None:
-    decision = decide(attempt, Verdict.APPROVE, retryable=True)
+def test_approval_of_the_last_card_lands(attempt: Attempt) -> None:
+    decision = decide(attempt, Verdict.APPROVE, retryable=True, last_card=True)
     assert decision.action is Action.LAND and decision.next_attempt is None
     assert decision.outcome == "pass"
     assert next_of(decision.output_json) == [{"action": "land", "round": "1"}]
 
 
+@pytest.mark.parametrize("attempt", [Attempt(Tier.T1, 1), Attempt(Tier.T1, 2), Attempt(Tier.T2, 1), Attempt(Tier.T3, 1)])
+def test_approval_with_cards_left_starts_the_next_card_at_t1(attempt: Attempt) -> None:
+    decision = decide(attempt, Verdict.APPROVE, retryable=True, last_card=False)
+    assert decision.action is Action.T1 and decision.next_attempt == first_attempt(Tier.T1)
+    assert decision.outcome == "pass"
+    assert next_of(decision.output_json) == [{"action": "t1", "round": "1"}]
+
+
+@pytest.mark.parametrize("last_card", [True, False])
+def test_rejection_ignores_the_cards_left(last_card: bool) -> None:
+    decision = decide(first_attempt(Tier.T2), Verdict.REJECT, retryable=True, last_card=last_card)
+    assert decision.action is Action.T3 and decision.next_attempt == first_attempt(Tier.T3)
+
+
 def test_a_first_t1_rejection_retries_t1() -> None:
-    decision = decide(first_attempt(Tier.T1), Verdict.REJECT, retryable=True)
+    decision = decide(first_attempt(Tier.T1), Verdict.REJECT, retryable=True, last_card=True)
     assert decision.action is Action.T1 and decision.next_attempt == Attempt(Tier.T1, 2)
     assert decision.outcome == "pass"
     assert next_of(decision.output_json) == [{"action": "t1", "round": "2"}]
 
 
 def test_a_blocked_t1_attempt_skips_the_retry() -> None:
-    decision = decide(first_attempt(Tier.T1), Verdict.REJECT, retryable=False)
+    decision = decide(first_attempt(Tier.T1), Verdict.REJECT, retryable=False, last_card=True)
     assert decision.action is Action.T2 and decision.next_attempt == first_attempt(Tier.T2)
     assert next_of(decision.output_json) == [{"action": "t2", "round": "1"}]
 
@@ -37,14 +51,14 @@ def test_a_blocked_t1_attempt_skips_the_retry() -> None:
     [(Attempt(Tier.T1, 2), Action.T2), (first_attempt(Tier.T2), Action.T3)],
 )
 def test_rejection_without_retries_left_escalates_one_tier(attempt: Attempt, action: Action) -> None:
-    decision = decide(attempt, Verdict.REJECT, retryable=True)
+    decision = decide(attempt, Verdict.REJECT, retryable=True, last_card=True)
     assert decision.action is action
     assert decision.outcome == "pass"
     assert next_of(decision.output_json) == [{"action": action.value, "round": "1"}]
 
 
 def test_rejection_at_the_top_blocks_and_fails_with_no_next_step() -> None:
-    decision = decide(first_attempt(Tier.T3), Verdict.REJECT, retryable=True)
+    decision = decide(first_attempt(Tier.T3), Verdict.REJECT, retryable=True, last_card=True)
     assert decision.action is Action.BLOCKED and decision.next_attempt is None
     assert decision.outcome == "fail"
     assert next_of(decision.output_json) == []
@@ -79,3 +93,15 @@ def test_step_metadata_gives_the_attempt() -> None:
 @pytest.mark.parametrize(("tier", "rounds"), [("t9", "1"), ("", ""), ("t1", "0"), ("t1", "x"), ("t1", "3"), ("t2", "2")])
 def test_bad_step_metadata_is_refused(tier: str, rounds: str) -> None:
     assert isinstance(attempt_of(tier, rounds), Err)
+
+
+@pytest.mark.parametrize(
+    ("tiers", "top"),
+    [([Tier.T1], Tier.T1), ([Tier.T2, Tier.T1], Tier.T2), ([Tier.T1, Tier.T3, Tier.T2], Tier.T3)],
+)
+def test_highest_ranks_tiers_by_cost(tiers: list[Tier], top: Tier) -> None:
+    assert highest(tiers) == Ok(top)
+
+
+def test_highest_of_nothing_is_an_error() -> None:
+    assert isinstance(highest([]), Err)

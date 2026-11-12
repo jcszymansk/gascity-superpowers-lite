@@ -12,8 +12,10 @@ from typing import Any
 
 import pytest
 
+from litetools import card as cards
 from litetools import commands
 from litetools.ladder import Tier, first_attempt
+from litetools.result import Ok
 
 PACK = Path(__file__).resolve().parents[2]
 FAKE_GC = Path(__file__).resolve().parent / "fake_gc.py"
@@ -121,6 +123,14 @@ class World:
     def artifacts(self) -> Path:
         return self.city / ".gc" / "artifacts" / "st" / "superpowers-lite" / ANCHOR
 
+    def card_dir(self, number: int = 1) -> Path:
+        return self.artifacts / "cards" / str(number)
+
+    def draft(self, number: int = 1) -> Path:
+        path = self.artifacts / "drafts" / f"{number}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
 
 @pytest.fixture
 def world(tmp_path: Path) -> World:
@@ -157,14 +167,15 @@ def prepared(world: World) -> None:
 
 def sealed(world: World, card: str = CARD) -> None:
     prepared(world)
-    world.artifacts.mkdir(parents=True, exist_ok=True)
-    (world.artifacts / "card.draft.md").write_text(card)
+    world.draft().write_text(card)
     result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
     assert result.returncode == 0, result.stderr
 
 
-def attempted(world: World, tier: str, content: str, extra: dict[str, str] | None = None, round_: str = "") -> None:
-    started = world.claim_and_run(f"s-att-{tier}{round_}", "attempt", "attempt-start", tier=tier, round_=round_)
+def attempted(
+    world: World, tier: str, content: str, extra: dict[str, str] | None = None, round_: str = "", name: str = ""
+) -> None:
+    started = world.claim_and_run(name or f"s-att-{tier}{round_}", "attempt", "attempt-start", tier=tier, round_=round_)
     assert started.returncode == 0, started.stderr
     (world.worktree / "src" / "app.txt").write_text(content)
     for name, text in (extra or {}).items():
@@ -174,8 +185,8 @@ def attempted(world: World, tier: str, content: str, extra: dict[str, str] | Non
     assert finished.returncode == 0, finished.stderr
 
 
-def verified(world: World, tier: str, round_: str = "") -> subprocess.CompletedProcess[str]:
-    return world.claim_and_run(f"s-ver-{tier}{round_}", "verify", "verify", tier=tier, round_=round_)
+def verified(world: World, tier: str, round_: str = "", name: str = "") -> subprocess.CompletedProcess[str]:
+    return world.claim_and_run(name or f"s-ver-{tier}{round_}", "verify", "verify", tier=tier, round_=round_)
 
 
 def output(world: World, step: str) -> Any:
@@ -374,15 +385,14 @@ def test_cut_card_start_prints_the_bead_and_template(world: World) -> None:
     result = world.claim_and_run("s-cut", "cut-card", "cut-card-start")
     assert result.returncode == 0, result.stderr
     assert "fix the app" in result.stdout and "It prints broken." in result.stdout
-    assert str(world.artifacts / "card.draft.md") in result.stdout
+    assert str(world.artifacts / "drafts" / "1.md") in result.stdout
     assert 'id = "st-1"' in result.stdout
     assert "Example card, from another project" in result.stdout and 'id = "ex-41"' in result.stdout
 
 
 def test_cut_card_finish_lists_every_error_and_keeps_the_step_open(world: World) -> None:
     prepared(world)
-    world.artifacts.mkdir(parents=True, exist_ok=True)
-    (world.artifacts / "card.draft.md").write_text(CARD.replace('kind = "bugfix"', 'kind = "nope"').replace("## Goal", "## Goals"))
+    world.draft().write_text(CARD.replace('kind = "bugfix"', 'kind = "nope"').replace("## Goal", "## Goals"))
     result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
     assert result.returncode == 1
     assert "'kind' must be one of" in result.stderr and "missing section '## Goal'" in result.stderr
@@ -391,15 +401,14 @@ def test_cut_card_finish_lists_every_error_and_keeps_the_step_open(world: World)
 
 def test_cut_card_finish_refuses_a_card_for_another_bead(world: World) -> None:
     prepared(world)
-    world.artifacts.mkdir(parents=True, exist_ok=True)
-    (world.artifacts / "card.draft.md").write_text(CARD.replace('id = "st-1"', 'id = "st-9"'))
+    world.draft().write_text(CARD.replace('id = "st-1"', 'id = "st-9"'))
     result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
     assert result.returncode == 1 and "must be st-1" in result.stderr
 
 
 def test_cut_card_finish_seals_the_card_with_the_kind_checklist(world: World) -> None:
     sealed(world)
-    text = (world.artifacts / "card.md").read_text()
+    text = (world.card_dir() / "card.md").read_text()
     checklist = (PACK / "assets" / "kinds" / "bugfix.md").read_text().strip()
     assert text.rstrip().endswith(checklist)
     assert world.meta(ANCHOR)["lite.kind"] == "bugfix"
@@ -408,16 +417,14 @@ def test_cut_card_finish_seals_the_card_with_the_kind_checklist(world: World) ->
 
 def test_cut_card_finish_refuses_a_solution_in_steps(world: World) -> None:
     prepared(world)
-    world.artifacts.mkdir(parents=True, exist_ok=True)
-    (world.artifacts / "card.draft.md").write_text(CARD.replace("## Steps\n", "## Steps\n\n```\nnew code\n```\n"))
+    world.draft().write_text(CARD.replace("## Steps\n", "## Steps\n\n```\nnew code\n```\n"))
     result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
     assert result.returncode == 1 and "'## Steps' holds a code block" in result.stderr
     assert world.bead("s-cut")["status"] == "in_progress"
 
 
 def _card_quoting(world: World, code: str) -> None:
-    world.artifacts.mkdir(parents=True, exist_ok=True)
-    (world.artifacts / "card.draft.md").write_text(CARD.replace("## Context\n", f"## Context\n\n```\n{code}\n```\n"))
+    world.draft().write_text(CARD.replace("## Context\n", f"## Context\n\n```\n{code}\n```\n"))
 
 
 def test_cut_card_finish_refuses_context_code_not_in_the_repository(world: World) -> None:
@@ -511,7 +518,7 @@ def test_attempt_finish_commits_and_reports(world: World) -> None:
     head = git(world.worktree, "rev-parse", "HEAD")
     assert head != base
     assert git(world.worktree, "log", "-1", "--format=%s") == "st-1 (t1): t1 change"
-    report = (world.artifacts / "attempts" / "t1" / "report.md").read_text()
+    report = (world.card_dir() / "attempts" / "t1" / "report.md").read_text()
     assert 'status = "done"' in report and f'commit = "{head}"' in report
     assert world.meta("s-att-t1")["lite.attempt_status"] == "done"
 
@@ -537,7 +544,7 @@ def test_attempt_commit_carries_the_bead_trailer_and_a_short_subject(world: Worl
     ],
 )
 def test_attempt_subject_is_the_first_sentence_cut_at_a_word(summary: str, subject: str) -> None:
-    message = commands._attempt_message("st-1", first_attempt(Tier.T1), summary)
+    message = commands._attempt_message("st-1", first_attempt(Tier.T1).key, summary)
     assert message.splitlines()[0] == subject
     assert len(subject) <= 72
 
@@ -558,7 +565,7 @@ def test_clean_t1_attempt_passes_checks_and_approval_lands(world: World) -> None
     assert "Every check passed" in result.stdout
     assert world.meta("s-ver-t1")["lite.checks"] == "passed"
     assert world.meta(ANCHOR)["lite.card_overlap.t1"] == "0/0"
-    assert (world.artifacts / "attempts" / "t1" / "attempt.diff").read_text().count("+fixed") == 1
+    assert (world.card_dir() / "attempts" / "t1" / "attempt.diff").read_text().count("+fixed") == 1
     approved = world.run("verdict", "approve")
     assert approved.returncode == 0, approved.stderr
     assert output(world, "s-ver-t1") == {"next": [{"action": "land", "round": "1"}]}
@@ -591,7 +598,7 @@ def runs(world: World) -> int:
 
 
 def checks_dir(world: World, key: str = "t1") -> Path:
-    return world.artifacts / "attempts" / key / "checks"
+    return world.card_dir() / "attempts" / key / "checks"
 
 
 def test_slow_done_when_leaves_the_step_open_and_a_second_verify_attaches(world: World) -> None:
@@ -657,7 +664,7 @@ def test_failed_checks_retry_t1_without_review(world: World) -> None:
     assert result.returncode == 0, result.stderr
     assert output(world, "s-ver-t1") == {"next": [{"action": "t1", "round": "2"}]}
     assert world.meta(ANCHOR)["lite.last_rejected"] == "t1"
-    findings = (world.artifacts / "attempts" / "t1" / "findings.md").read_text()
+    findings = (world.card_dir() / "attempts" / "t1" / "findings.md").read_text()
     assert "## card-done" in findings
     assert "src/other.txt" not in findings
     assert world.meta(ANCHOR)["lite.attempt.t1"] == "rejected: failed checks: card-done"
@@ -689,7 +696,7 @@ def test_an_empty_attempt_fails_the_non_empty_diff_check(world: World) -> None:
     attempted(world, "t1", "broken\n")
     result = verified(world, "t1")
     assert result.returncode == 0, result.stderr
-    findings = (world.artifacts / "attempts" / "t1" / "findings.md").read_text()
+    findings = (world.card_dir() / "attempts" / "t1" / "findings.md").read_text()
     assert "## non-empty-diff" in findings and "the attempt changed nothing" in findings
 
 
@@ -722,7 +729,7 @@ def test_adding_a_skip_marker_is_rejected_without_review(world: World) -> None:
     attempted(world, "t1", "fixed\n", extra={"tests/app_test.txt": "#[ignore]\n#[test]\nfn works() {}\n"})
     assert verified(world, "t1").returncode == 0
     assert "no-skip-markers" in world.meta(ANCHOR)["lite.attempt.t1"]
-    findings = (world.artifacts / "attempts" / "t1" / "findings.md").read_text()
+    findings = (world.card_dir() / "attempts" / "t1" / "findings.md").read_text()
     assert "added a skip marker in tests/app_test.txt: #[ignore]" in findings
 
 
@@ -738,7 +745,7 @@ def test_a_blocked_attempt_escalates(world: World) -> None:
     world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
     assert world.run("attempt-finish", "--blocked", "the file is generated").returncode == 0
     assert verified(world, "t1").returncode == 0
-    findings = (world.artifacts / "attempts" / "t1" / "findings.md").read_text()
+    findings = (world.card_dir() / "attempts" / "t1" / "findings.md").read_text()
     assert "the file is generated" in findings
     assert output(world, "s-ver-t1") == {"next": [{"action": "t2", "round": "1"}]}
 
@@ -754,7 +761,7 @@ def test_t1_retry_starts_from_the_rejected_attempt_and_sees_its_findings(world: 
     assert git(world.worktree, "rev-parse", "HEAD") == rejected
     assert (world.worktree / "src" / "other.txt").exists()
     assert "Attempt T1.2" in started.stdout and "This is a retry" in started.stdout
-    assert str(world.artifacts / "attempts" / "t1" / "findings.md") in started.stdout
+    assert str(world.card_dir() / "attempts" / "t1" / "findings.md") in started.stdout
 
 
 def test_an_approved_retry_lands_with_both_attempts_recorded(world: World) -> None:
@@ -771,7 +778,7 @@ def test_an_approved_retry_lands_with_both_attempts_recorded(world: World) -> No
     assert meta["lite.attempt.t1"].startswith("rejected: failed checks: card-done")
     assert meta["lite.attempt.t1.2"] == "approved" and meta["lite.passed_tier"] == "t1"
     assert "lite.card_overlap.t1.2" in meta
-    assert (world.artifacts / "attempts" / "t1.2" / "report.md").exists()
+    assert (world.card_dir() / "attempts" / "t1.2" / "report.md").exists()
     assert git(world.worktree, "log", "-1", "--format=%s").startswith("st-1 (t1.2): ")
 
 
@@ -786,7 +793,7 @@ def test_a_rejected_retry_escalates_to_t2_from_the_base(world: World) -> None:
     started = world.claim_and_run("s-att-t2", "attempt", "attempt-start", tier="t2")
     assert started.returncode == 0, started.stderr
     assert git(world.worktree, "rev-parse", "HEAD") == world.meta(ANCHOR)["lite.base_commit"]
-    assert str(world.artifacts / "attempts" / "t1.2" / "findings.md") in started.stdout
+    assert str(world.card_dir() / "attempts" / "t1.2" / "findings.md") in started.stdout
 
 
 def test_a_retry_with_no_rejected_attempt_is_refused(world: World) -> None:
@@ -814,7 +821,7 @@ def test_t2_starts_from_the_base_and_sees_t1_findings(world: World) -> None:
     assert git(world.worktree, "rev-parse", "HEAD") == world.meta(ANCHOR)["lite.base_commit"]
     assert not (world.worktree / "junk.txt").exists()
     assert (world.worktree / "build" / "cache").exists()
-    assert str(world.artifacts / "attempts" / "t1" / "findings.md") in started.stdout
+    assert str(world.card_dir() / "attempts" / "t1" / "findings.md") in started.stdout
 
 
 def test_review_rejection_at_t2_asks_a_human_for_t3(world: World) -> None:
@@ -827,7 +834,7 @@ def test_review_rejection_at_t2_asks_a_human_for_t3(world: World) -> None:
     mail = world.state["mail"]
     assert len(mail) == 1 and mail[0]["to"] == "human"
     assert "gc superpowers-lite approve --rig st st-1" in mail[0]["body"]
-    assert "wrong casing" in (world.artifacts / "attempts" / "t2" / "findings.md").read_text()
+    assert "wrong casing" in (world.card_dir() / "attempts" / "t2" / "findings.md").read_text()
 
 
 def test_rejection_at_t3_blocks_and_fails(world: World) -> None:
@@ -972,3 +979,233 @@ def test_close_anchor_fails_when_close_is_refused(world: World) -> None:
     assert result.returncode == 0
     assert world.meta("s-close")["gc.outcome"] == "fail"
     assert world.bead(ANCHOR)["status"] == "open"
+
+
+# --- several cards ------------------------------------------------------------------
+
+CARD_2 = (
+    CARD.replace('kind = "bugfix"', 'kind = "tdd-feature"')
+    .replace("grep -q fixed src/app.txt", "grep -q polished src/app.txt")
+    .replace("The app prints fixed.", "The app prints fixed and polished.")
+    .replace("1. Replace broken with fixed.", "1. Add polished after fixed.")
+)
+
+
+def sealed_two(world: World) -> None:
+    prepared(world)
+    world.draft(1).write_text(CARD)
+    world.draft(2).write_text(CARD_2)
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 0, result.stderr
+
+
+def pass_first_card(world: World) -> str:
+    """Pass card 1 at t1 and return its commit."""
+    attempted(world, "t1", "fixed\n", name="s-att-c1")
+    assert verified(world, "t1", name="s-ver-c1").returncode == 0
+    approved = world.run("verdict", "approve")
+    assert approved.returncode == 0, approved.stderr
+    return world.meta("s-att-c1")["lite.attempt_commit"]
+
+
+def test_cut_card_finish_seals_several_drafts_in_order(world: World) -> None:
+    sealed_two(world)
+    meta = world.meta(ANCHOR)
+    assert meta["lite.cards"] == "2" and meta["lite.card"] == "1"
+    assert meta["lite.kind"] == "bugfix,tdd-feature"
+    assert meta["lite.card.1.kind"] == "bugfix" and meta["lite.card.2.kind"] == "tdd-feature"
+    assert "grep -q fixed src/app.txt" in (world.card_dir(1) / "card.md").read_text()
+    second = (world.card_dir(2) / "card.md").read_text()
+    assert "grep -q polished src/app.txt" in second
+    assert second.rstrip().endswith((PACK / "assets" / "kinds" / "tdd-feature.md").read_text().strip())
+    assert "sealed 2 cards" in world.bead("s-cut")["close_reason"]
+
+
+def test_one_card_of_one_kind_records_the_plain_kind(world: World) -> None:
+    sealed(world)
+    meta = world.meta(ANCHOR)
+    assert meta["lite.cards"] == "1" and meta["lite.kind"] == "bugfix"
+    assert not any(key.startswith("lite.card.") for key in meta)
+
+
+def test_cut_card_finish_reports_the_errors_of_every_card_by_number(world: World) -> None:
+    prepared(world)
+    world.draft(1).write_text(CARD.replace("## Goal", "## Goals"))
+    world.draft(2).write_text(CARD_2.replace('id = "st-1"', 'id = "st-9"'))
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 1
+    assert "card 1: missing section '## Goal'" in result.stderr
+    assert "card 2: the card id must be st-1, not st-9" in result.stderr
+    assert world.bead("s-cut")["status"] == "in_progress"
+    assert "lite.cards" not in world.meta(ANCHOR)
+
+
+def test_cut_card_finish_checks_context_quotes_in_every_card(world: World) -> None:
+    prepared(world)
+    world.draft(1).write_text(CARD)
+    world.draft(2).write_text(CARD_2.replace("## Context\n", "## Context\n\n```\nmade up line\n```\n"))
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 1 and "card 2: '## Context' code must quote the repository" in result.stderr
+
+
+def test_cut_card_finish_refuses_a_gap_in_the_numbering(world: World) -> None:
+    prepared(world)
+    world.draft(1).write_text(CARD)
+    world.draft(3).write_text(CARD_2)
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 1 and "missing 2.md" in result.stderr
+    assert world.bead("s-cut")["status"] == "in_progress"
+
+
+def test_cut_card_finish_refuses_a_stray_file_among_the_drafts(world: World) -> None:
+    prepared(world)
+    world.draft(1).write_text(CARD)
+    (world.artifacts / "drafts" / "notes.md").write_text("thinking")
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 1 and "notes.md is not a card draft" in result.stderr
+
+
+def test_cut_card_finish_needs_a_draft(world: World) -> None:
+    prepared(world)
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 1 and "no card drafts in" in result.stderr
+
+
+def test_cut_card_finish_refuses_more_cards_than_the_cap(world: World) -> None:
+    prepared(world)
+    for number in range(1, 12):
+        world.draft(number).write_text(CARD)
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 1 and "11 cards; the cap is 10" in result.stderr
+
+
+def test_cut_card_start_offers_several_cards(world: World) -> None:
+    prepared(world)
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-start")
+    assert result.returncode == 0, result.stderr
+    assert "1.md, 2.md, ... (at most 10)" in result.stdout
+
+
+def test_approving_a_card_with_cards_left_moves_to_the_next_card_at_t1(world: World) -> None:
+    sealed_two(world)
+    commit = pass_first_card(world)
+    assert output(world, "s-ver-c1") == {"next": [{"action": "t1", "round": "1"}]}
+    assert world.meta("s-ver-c1")["gc.outcome"] == "pass"
+    assert "card 1 of 2 t1 approve" in world.bead("s-ver-c1")["close_reason"]
+    meta = world.meta(ANCHOR)
+    assert meta["lite.card"] == "2"
+    assert meta["lite.card.2.base_commit"] == commit
+    assert meta["lite.card.1.attempt.t1"] == "approved" and meta["lite.card.1.passed_tier"] == "t1"
+    assert "lite.passed_tier" not in meta and "lite.attempt.t1" not in meta
+    assert "lite.card.1.card_overlap.t1" in meta and "lite.card.1.files_touched.t1" in meta
+    assert world.meta("s-att-c1")["lite.card"] == "1" and world.meta("s-ver-c1")["lite.card"] == "1"
+    assert git(world.worktree, "log", "-1", "--format=%s") == "st-1 (1/2 t1): t1 change"
+    assert (world.card_dir(1) / "attempts" / "t1" / "report.md").exists()
+
+
+def test_land_refuses_an_item_whose_last_card_has_not_passed(world: World) -> None:
+    sealed_two(world)
+    pass_first_card(world)
+    result = world.claim_and_run("s-land", "land", "land")
+    assert result.returncode == 0
+    assert world.meta("s-land")["gc.outcome"] == "fail"
+    assert "no approved attempt" in world.bead("s-land")["close_reason"]
+
+
+def test_the_next_card_starts_from_the_previous_card_and_says_so(world: World) -> None:
+    sealed_two(world)
+    commit = pass_first_card(world)
+    started = world.claim_and_run("s-att-c2", "attempt", "attempt-start", tier="t1")
+    assert started.returncode == 0, started.stderr
+    assert git(world.worktree, "rev-parse", "HEAD") == commit
+    assert "Attempt T1 for st-1, card 2 of 2." in started.stdout
+    assert str(world.card_dir(2) / "card.md") in started.stdout
+    assert "Cards 1 to 1 are" in started.stdout
+    assert "rejected" not in started.stdout
+
+
+def test_the_last_card_lands_every_card_and_records_the_highest_tier(world: World) -> None:
+    sealed_two(world)
+    first = pass_first_card(world)
+    attempted(world, "t1", "fixed\n", name="s-att-c2")
+    assert verified(world, "t1", name="s-ver-c2").returncode == 0
+    assert output(world, "s-ver-c2") == {"next": [{"action": "t1", "round": "2"}]}
+    assert world.meta(ANCHOR)["lite.card.2.last_rejected"] == "t1"
+    findings = world.card_dir(2) / "attempts" / "t1" / "findings.md"
+    assert "## card-done" in findings.read_text()
+    attempted(world, "t1", "fixed\n", round_="2", name="s-att-c2r")
+    assert verified(world, "t1", "2", name="s-ver-c2r").returncode == 0
+    assert output(world, "s-ver-c2r") == {"next": [{"action": "t2", "round": "1"}]}
+    started = world.claim_and_run("s-att-c2t2", "attempt", "attempt-start", tier="t2")
+    assert started.returncode == 0, started.stderr
+    assert git(world.worktree, "rev-parse", "HEAD") == first
+    assert "reset to where card 2 of 2 starts" in started.stdout
+    (world.worktree / "src" / "app.txt").write_text("fixed\npolished\n")
+    assert world.run("attempt-finish", "--summary", "t2 polish").returncode == 0
+    result = verified(world, "t2", name="s-ver-c2t2")
+    assert result.returncode == 0, result.stderr
+    assert "This is card 2 of 2" in result.stdout
+    diff = (world.card_dir(2) / "attempts" / "t2" / "attempt.diff").read_text()
+    assert "+polished" in diff and "+fixed" not in diff
+    assert world.run("verdict", "approve").returncode == 0
+    assert output(world, "s-ver-c2t2") == {"next": [{"action": "land", "round": "1"}]}
+    meta = world.meta(ANCHOR)
+    assert meta["lite.card.2.passed_tier"] == "t2" and meta["lite.passed_tier"] == "t2"
+    landed = world.claim_and_run("s-land", "land", "land")
+    assert landed.returncode == 0, landed.stderr
+    branch = f"refs/heads/lite/{ANCHOR}"
+    assert git(world.rig, "rev-parse", branch) == git(world.worktree, "rev-parse", "HEAD")
+    subjects = git(world.rig, "log", "--format=%s", f"main..{branch}").splitlines()
+    assert subjects == ["st-1 (2/2 t2): t2 polish", "st-1 (1/2 t1): t1 change"]
+
+
+def test_the_last_card_refuses_to_land_when_an_earlier_card_never_passed(world: World) -> None:
+    sealed_two(world)
+    pass_first_card(world)
+    state = world.state
+    del state["beads"][ANCHOR]["metadata"]["lite.card.1.passed_tier"]
+    world.save(state)
+    attempted(world, "t1", "fixed\npolished\n", name="s-att-c2")
+    assert verified(world, "t1", name="s-ver-c2").returncode == 0
+    result = world.run("verdict", "approve")
+    assert result.returncode == 1 and "card 1 never passed" in result.stderr
+    assert world.bead("s-ver-c2")["status"] != "closed"
+    assert "lite.passed_tier" not in world.meta(ANCHOR)
+
+
+def test_a_verify_step_retried_after_the_anchor_moved_on_keeps_its_card(world: World) -> None:
+    sealed_two(world)
+    attempted(world, "t1", "fixed\n", name="s-att-c1")
+    assert verified(world, "t1", name="s-ver-c1").returncode == 0
+    state = world.state
+    state["beads"][ANCHOR]["metadata"].update({"lite.card": "2", "lite.card.2.base_commit": "0" * 40})
+    world.save(state)
+    approved = world.run("verdict", "approve")
+    assert approved.returncode == 0, approved.stderr
+    meta = world.meta(ANCHOR)
+    assert meta["lite.card.1.attempt.t1"] == "approved"
+    assert meta["lite.card.2.base_commit"] == world.meta("s-att-c1")["lite.attempt_commit"]
+
+
+def test_t3_mail_names_the_card(world: World) -> None:
+    sealed_two(world)
+    attempted(world, "t2", "fixed\n", name="s-att-c1")
+    assert verified(world, "t2", name="s-ver-c1").returncode == 0
+    assert world.run("verdict", "reject", "--reason", "src/app.txt:1 wrong").returncode == 0
+    assert "failed at t1 and t2 on card 1 of 2" in world.state["mail"][0]["body"]
+
+
+def test_an_item_cut_before_cards_were_numbered_keeps_its_root_card(world: World) -> None:
+    prepared(world)
+    sealed_text = cards.seal(CARD, (PACK / "assets" / "kinds" / "bugfix.md").read_text())
+    assert isinstance(sealed_text, Ok)
+    (world.artifacts / "card.md").write_text(sealed_text.value)
+    attempted(world, "t1", "fixed\n")
+    assert verified(world, "t1").returncode == 0
+    assert world.run("verdict", "approve").returncode == 0
+    assert output(world, "s-ver-t1") == {"next": [{"action": "land", "round": "1"}]}
+    meta = world.meta(ANCHOR)
+    assert meta["lite.passed_tier"] == "t1" and meta["lite.attempt.t1"] == "approved"
+    assert (world.artifacts / "attempts" / "t1" / "report.md").exists()
+    assert not (world.artifacts / "cards").exists()
+    assert "lite.card" not in world.meta("s-ver-t1")

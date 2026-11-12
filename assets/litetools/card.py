@@ -49,6 +49,9 @@ log = logging.getLogger(__name__)
 SCHEMA = "lite.card.v1"
 FENCE = "+++"
 MAX_DONE_WHEN = 8
+MAX_CARDS = 10
+"""The most cards one work bead may be cut into; a bead that needs more is a
+project for lite-build, not one work item."""
 MAX_CARD_BYTES = 32 * 1024
 MAX_INTERFACE_CODE_LINES = 40
 MAX_INLINE_CODE = 120

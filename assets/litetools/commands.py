@@ -19,9 +19,12 @@ from litetools import card as cards
 from litetools import checks, donewhen, gitops
 from litetools import report as reports
 from litetools.context import (
+    CardLayout,
+    CardRef,
     Env,
     Item,
     Layout,
+    card_ref,
     claimed_bead_id,
     forget_claim,
     layout_for,
@@ -30,13 +33,14 @@ from litetools.context import (
     step_attempt,
 )
 from litetools.gc import Bead, Gc
-from litetools.ladder import Action, Attempt, Decision, Tier, Verdict, decide, parse_attempt
+from litetools.ladder import Action, Attempt, Decision, Tier, Verdict, decide, highest, parse_attempt
 from litetools.result import Err, Ok, Result
 
 log = logging.getLogger(__name__)
 
 DONE_WHEN_TIMEOUT_SECONDS = 15 * 60
 OPEN_STATUSES = ("open", "in_progress")
+_DRAFT_NAME = re.compile(r"(?P<number>[1-9][0-9]*)\.md")
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,15 +145,62 @@ def _workdir(item: Item) -> Result[Path, str]:
     return Ok(path) if path.is_dir() else Err(f"worktree {path} does not exist")
 
 
-def _sealed_card(ctx: Ctx, item: Item) -> Result[cards.Card, str]:
-    text = _read(_layout(ctx, item).card)
+@dataclass(frozen=True, slots=True)
+class CardScope:
+    """The card a claimed attempt or verify step serves.
+
+    Attributes:
+        ref: Which card, of how many.
+        files: The card's artifact files.
+        base: The commit the card's work starts from: the item's base for the
+            first card, the previous card's approved attempt for the others.
+        card: The sealed card.
+    """
+
+    ref: CardRef
+    files: CardLayout
+    base: str
+    card: cards.Card
+
+
+def _card_base_key(number: int) -> str:
+    return "lite.base_commit" if number == 1 else f"lite.card.{number}.base_commit"
+
+
+def _card_scope(ctx: Ctx, item: Item) -> Result[CardScope, str]:
+    """Resolve the claimed step's card and pin it on the step.
+
+    Pinning keeps the step on its card when it runs again after the anchor
+    moved on to the next card, as a verify step does when its close fails
+    after its decision was recorded.
+    """
+    ref = card_ref(item.anchor, item.step)
+    if isinstance(ref, Err):
+        return ref
+    base = item.anchor.meta(_card_base_key(ref.value.number))
+    if not base:
+        return Err(f"source anchor {item.anchor.bead_id} has no {_card_base_key(ref.value.number)}")
+    files = _layout(ctx, item).card(ref.value)
+    card = _sealed_card(files.card, item.anchor.bead_id)
+    if isinstance(card, Err):
+        return card
+    if not ref.value.legacy and item.step.meta("lite.card") != str(ref.value.number):
+        pinned = ctx.gc.set_metadata(item.step.bead_id, {"lite.card": str(ref.value.number)})
+        if isinstance(pinned, Err):
+            return pinned
+    log.info("step %s works on %s of %s", item.step.bead_id, ref.value.label, item.anchor.bead_id)
+    return Ok(CardScope(ref.value, files, base, card.value))
+
+
+def _sealed_card(path: Path, anchor_id: str) -> Result[cards.Card, str]:
+    text = _read(path)
     if isinstance(text, Err):
         return text
     parsed = cards.parse(text.value, require_checklist=True)
     if isinstance(parsed, Err):
         return Err("the sealed card is invalid: " + "; ".join(parsed.error))
-    if parsed.value.card_id != item.anchor.bead_id:
-        return Err(f"the card is for {parsed.value.card_id}, not {item.anchor.bead_id}")
+    if parsed.value.card_id != anchor_id:
+        return Err(f"the card is for {parsed.value.card_id}, not {anchor_id}")
     return parsed
 
 
@@ -331,7 +382,7 @@ def _prepare(ctx: Ctx, item: Item) -> Result[str, str]:
 
 
 def cut_card_start(ctx: Ctx) -> Outcome:
-    """Print the work bead and where to write its card."""
+    """Print the work bead and where to write its cards."""
     found = _claimed_step(ctx, "cut-card")
     if isinstance(found, Err):
         return found
@@ -356,7 +407,10 @@ def cut_card_start(ctx: Ctx) -> Outcome:
                     item.anchor.description.strip() or "(no description)",
                     "",
                     f"Repository worktree (read it, change nothing): {workdir.value}",
-                    f"Write the card to: {layout.card_draft}",
+                    f"Write the cards to: {layout.drafts}/",
+                    f"  one card: {layout.draft(1)}",
+                    f"  several, in the order they must be done: {layout.draft(1).name}, "
+                    f"{layout.draft(2).name}, ... (at most {cards.MAX_CARDS})",
                     f"Kinds: {kinds}",
                     "",
                     "Card template:",
@@ -372,8 +426,39 @@ def cut_card_start(ctx: Ctx) -> Outcome:
     )
 
 
-def _context_quote_errors(item: Item, card: cards.Card) -> Result[list[str], str]:
-    """Check the card's quoted code against the worktree, which must be untouched.
+def _draft_paths(layout: Layout) -> Result[list[Path], list[str]]:
+    """Return the cutter's drafts in card order, or every problem with the drafts directory.
+
+    The drafts must be named ``1.md`` to ``<n>.md`` with no gap, because their
+    numbers are the order the cards are done in.
+    """
+    try:
+        entries = sorted(layout.drafts.iterdir()) if layout.drafts.is_dir() else []
+    except OSError as error:
+        return Err([f"could not list {layout.drafts}: {error}"])
+    numbered: dict[int, Path] = {}
+    errors: list[str] = []
+    for entry in entries:
+        match = _DRAFT_NAME.fullmatch(entry.name)
+        if match is None or not entry.is_file():
+            errors.append(f"{entry} is not a card draft; name the drafts 1.md, 2.md, ... and remove anything else")
+        else:
+            numbered[int(match.group("number"))] = entry
+    if not numbered and not errors:
+        errors.append(f"no card drafts in {layout.drafts}; write the first card to {layout.draft(1)}")
+    if len(numbered) > cards.MAX_CARDS:
+        errors.append(
+            f"{len(numbered)} cards; the cap is {cards.MAX_CARDS}. A bead this large needs lite-build, "
+            "so report it with --blocked"
+        )
+    gaps = sorted(set(range(1, max(numbered, default=0) + 1)) - set(numbered))
+    if gaps:
+        errors.append("the drafts must be numbered from 1 with no gap; missing " + ", ".join(f"{n}.md" for n in gaps))
+    return Err(errors) if errors else Ok([numbered[n] for n in sorted(numbered)])
+
+
+def _context_quote_errors(item: Item, drafts: list[cards.Card]) -> Result[list[str], str]:
+    """Check every card's quoted code against the worktree, which must be untouched.
 
     A dirty worktree would let code the cutter wrote pass as existing code.
     """
@@ -388,14 +473,33 @@ def _context_quote_errors(item: Item, card: cards.Card) -> Result[list[str], str
     known = gitops.tracked_lines(workdir.value)
     if isinstance(known, Err):
         return known
-    return Ok(cards.unquoted_context_lines(card, known.value))
+    return Ok(
+        [
+            f"card {number}: {error}"
+            for number, card in enumerate(drafts, start=1)
+            for error in cards.unquoted_context_lines(card, known.value)
+        ]
+    )
+
+
+def _fix_cards(errors: list[str]) -> Outcome:
+    return Err("fix the cards and run this again:\n- " + "\n- ".join(errors))
+
+
+def _kinds_metadata(sealed: list[cards.Card]) -> dict[str, str]:
+    """The kind metadata of an item: ``lite.kind`` lists each kind once, in card order."""
+    kinds = list(dict.fromkeys(card.kind.value for card in sealed))
+    values = {"lite.kind": ",".join(kinds)}
+    if len(sealed) > 1:
+        values |= {f"lite.card.{n}.kind": card.kind.value for n, card in enumerate(sealed, start=1)}
+    return values
 
 
 def cut_card_finish(ctx: Ctx, blocked: str | None) -> Outcome:
-    """Validate and seal the cutter's card, then close the step.
+    """Validate and seal the cutter's cards, then close the step.
 
-    Returns an error listing every problem when the card is invalid; the step
-    stays open so the cutter can fix the card and run this again.
+    Returns an error listing every problem in every card when any is invalid;
+    the step stays open so the cutter can fix the cards and run this again.
     """
     found = _claimed_step(ctx, "cut-card")
     if isinstance(found, Err):
@@ -407,36 +511,57 @@ def cut_card_finish(ctx: Ctx, blocked: str | None) -> Outcome:
         recorded = ctx.gc.set_metadata(item.anchor.bead_id, {"lite.result": "uncuttable"})
         if isinstance(recorded, Err):
             return recorded
-        closed = _close_step(ctx, item.step, "fail", f"the work bead cannot become a card: {blocked.strip()}")
+        closed = _close_step(ctx, item.step, "fail", f"the work bead cannot become cards: {blocked.strip()}")
         return closed if isinstance(closed, Err) else Ok(Done("Closed: the item fails as uncuttable.", drain=True))
     layout = _layout(ctx, item)
-    draft = _read(layout.card_draft)
-    if isinstance(draft, Err):
-        return draft
-    parsed = cards.parse(draft.value, require_checklist=False)
-    if isinstance(parsed, Err):
-        return Err("fix the card and run this again:\n- " + "\n- ".join(parsed.error))
-    if parsed.value.card_id != item.anchor.bead_id:
-        return Err(f"the card id must be {item.anchor.bead_id}, not {parsed.value.card_id}")
-    quoted = _context_quote_errors(item, parsed.value)
+    paths = _draft_paths(layout)
+    if isinstance(paths, Err):
+        return _fix_cards(paths.error)
+    texts: list[str] = []
+    parsed: list[cards.Card] = []
+    errors: list[str] = []
+    for number, path in enumerate(paths.value, start=1):
+        text = _read(path)
+        if isinstance(text, Err):
+            return text
+        card = cards.parse(text.value, require_checklist=False)
+        if isinstance(card, Err):
+            errors += [f"card {number}: {error}" for error in card.error]
+            continue
+        if card.value.card_id != item.anchor.bead_id:
+            errors.append(f"card {number}: the card id must be {item.anchor.bead_id}, not {card.value.card_id}")
+        texts.append(text.value)
+        parsed.append(card.value)
+    if errors:
+        return _fix_cards(errors)
+    quoted = _context_quote_errors(item, parsed)
     if isinstance(quoted, Err):
         return quoted
     if quoted.value:
-        return Err("fix the card and run this again:\n- " + "\n- ".join(quoted.value))
-    checklist = _read(cards.checklist_path(ctx.env.pack_dir, parsed.value.kind))
-    if isinstance(checklist, Err):
-        return checklist
-    sealed = cards.seal(draft.value, checklist.value)
-    if isinstance(sealed, Err):
-        return Err("fix the card and run this again:\n- " + "\n- ".join(sealed.error))
-    written = _write(layout.card, sealed.value)
-    if isinstance(written, Err):
-        return written
-    recorded = ctx.gc.set_metadata(item.anchor.bead_id, {"lite.kind": parsed.value.kind.value})
+        return _fix_cards(quoted.value)
+    sealed_texts: list[str] = []
+    for number, (draft_text, draft_card) in enumerate(zip(texts, parsed, strict=True), start=1):
+        checklist = _read(cards.checklist_path(ctx.env.pack_dir, draft_card.kind))
+        if isinstance(checklist, Err):
+            return checklist
+        sealed = cards.seal(draft_text, checklist.value)
+        if isinstance(sealed, Err):
+            return _fix_cards([f"card {number}: {error}" for error in sealed.error])
+        sealed_texts.append(sealed.value)
+    total = len(sealed_texts)
+    for number, sealed_text in enumerate(sealed_texts, start=1):
+        written = _write(layout.card(CardRef(number, total, False)).card, sealed_text)
+        if isinstance(written, Err):
+            return written
+    recorded = ctx.gc.set_metadata(
+        item.anchor.bead_id, {"lite.cards": str(total), "lite.card": "1", **_kinds_metadata(parsed)}
+    )
     if isinstance(recorded, Err):
         return recorded
-    closed = _close_step(ctx, item.step, "pass", f"sealed {parsed.value.kind.value} card {layout.card}")
-    return closed if isinstance(closed, Err) else Ok(Done(f"Card sealed at {layout.card}.", drain=True))
+    log.info("item %s: sealed %d cards in %s", item.anchor.bead_id, total, layout.root / "cards")
+    what = "1 card" if total == 1 else f"{total} cards"
+    closed = _close_step(ctx, item.step, "pass", f"sealed {what} ({_kinds_metadata(parsed)['lite.kind']}) in {layout.root / 'cards'}")
+    return closed if isinstance(closed, Err) else Ok(Done(f"Sealed {what} in {layout.root / 'cards'}.", drain=True))
 
 
 # --- attempt -----------------------------------------------------------------
@@ -444,17 +569,17 @@ def cut_card_finish(ctx: Ctx, blocked: str | None) -> Outcome:
 MAX_SUBJECT_LENGTH = 72
 
 
-def _rejected_attempt(item: Item) -> Result[Attempt | None, str]:
-    """Return the item's last rejected attempt, or None before the first rejection."""
-    key = item.anchor.meta("lite.last_rejected")
+def _rejected_attempt(item: Item, ref: CardRef) -> Result[Attempt | None, str]:
+    """Return the card's last rejected attempt, or None before its first rejection."""
+    key = item.anchor.meta(f"{ref.prefix}last_rejected")
     if not key:
         return Ok(None)
     parsed = parse_attempt(key)
     return parsed if isinstance(parsed, Err) else Ok(parsed.value)
 
 
-def _start_commit(layout: Layout, attempt: Attempt, previous: Attempt | None, base: str) -> Result[str, str]:
-    """Return the commit an attempt starts from: the rejected attempt for a retry, else the base."""
+def _start_commit(layout: CardLayout, attempt: Attempt, previous: Attempt | None, base: str) -> Result[str, str]:
+    """Return the commit an attempt starts from: the rejected attempt for a retry, else the card's base."""
     if attempt.round == 1:
         return Ok(base)
     if previous is None or previous.tier is not attempt.tier or previous.round != attempt.round - 1:
@@ -471,7 +596,7 @@ def _start_commit(layout: Layout, attempt: Attempt, previous: Attempt | None, ba
 def attempt_start(ctx: Ctx) -> Outcome:
     """Prepare the worktree and print the card and the last rejection's findings.
 
-    A first attempt at a tier starts from the item's base; a retry starts from
+    A first attempt at a tier starts from the card's base; a retry starts from
     the attempt it retries.
     """
     found = _claimed_step(ctx, "attempt")
@@ -485,25 +610,29 @@ def attempt_start(ctx: Ctx) -> Outcome:
     workdir = _workdir(item)
     if isinstance(workdir, Err):
         return workdir
-    base = item.anchor.meta("lite.base_commit")
-    if not base:
-        return Err(f"source anchor {item.anchor.bead_id} has no lite.base_commit")
-    card = _sealed_card(ctx, item)
-    if isinstance(card, Err):
-        return card
-    layout = _layout(ctx, item)
-    previous = _rejected_attempt(item)
+    scope = _card_scope(ctx, item)
+    if isinstance(scope, Err):
+        return scope
+    ref, files = scope.value.ref, scope.value.files
+    previous = _rejected_attempt(item, ref)
     if isinstance(previous, Err):
         return previous
-    start = _start_commit(layout, attempt, previous.value, base)
+    start = _start_commit(files, attempt, previous.value, scope.value.base)
     if isinstance(start, Err):
         return start
     lines = [
-        f"Attempt {attempt.key.upper()} for {item.anchor.bead_id}.",
+        f"Attempt {attempt.key.upper()} for {item.anchor.bead_id}" + ("." if ref.total == 1 else f", {ref.label}."),
         f"Worktree (work only here): {workdir.value}",
-        f"Card (your whole task): {layout.card}",
-        f"Files the card expects you to change: {', '.join(card.value.files)}",
+        f"Card (your whole task): {files.card}",
+        f"Files the card expects you to change: {', '.join(scope.value.card.files)}",
     ]
+    if ref.number > 1:
+        lines += [
+            "",
+            f"The work bead was cut into {ref.total} cards, done in order. Cards 1 to {ref.number - 1} are",
+            "done and committed in the worktree: build on them, and change their work only where",
+            "your card says so.",
+        ]
     # gc restarts a session that sits idle while it holds this step, and the
     # new session starts here again: resetting would discard its work.
     if item.step.meta("lite.attempt_started") == "true":
@@ -522,19 +651,20 @@ def attempt_start(ctx: Ctx) -> Outcome:
     marked = ctx.gc.set_metadata(item.step.bead_id, {"lite.attempt_started": "true"})
     if isinstance(marked, Err):
         return marked
+    where = "the base commit" if ref.number == 1 else f"where {ref.label} starts"
     if attempt.round > 1 and previous.value is not None:
         lines += [
             "",
             f"This is a retry. Your {previous.value.key} attempt was rejected, and the worktree holds it",
-            f"(commit {start.value[:12]}). Read why: {layout.findings(previous.value)}",
+            f"(commit {start.value[:12]}). Read why: {files.findings(previous.value)}",
             "Fix what the findings name and keep what already works; do not start over.",
         ]
     elif previous.value is not None:
         lines += [
             "",
-            f"A {previous.value.key} attempt was rejected. The worktree is reset to the base commit.",
-            f"Why it was rejected: {layout.findings(previous.value)}",
-            f"Its diff, for reference only: {layout.diff(previous.value)}",
+            f"A {previous.value.key} attempt was rejected. The worktree is reset to {where}.",
+            f"Why it was rejected: {files.findings(previous.value)}",
+            f"Its diff, for reference only: {files.diff(previous.value)}",
             "Do not reapply that diff blindly; fix what the findings name.",
         ]
     lines += _attempt_finish_lines()
@@ -572,8 +702,11 @@ def run(ctx: Ctx, command: str) -> Outcome:
     workdir = _workdir(item)
     if isinstance(workdir, Err):
         return workdir
+    scope = _card_scope(ctx, item)
+    if isinstance(scope, Err):
+        return scope
     key = hashlib.sha256(command.encode()).hexdigest()[:16]
-    state = donewhen.State(_layout(ctx, item).attempt_dir(attempt.value) / "runs" / key)
+    state = donewhen.State(scope.value.files.attempt_dir(attempt.value) / "runs" / key)
     spec = donewhen.Spec("", (command,), workdir.value, DONE_WHEN_TIMEOUT_SECONDS)
     waited = donewhen.await_outcomes(state, spec, ctx.env.verify_wait_seconds)
     if isinstance(waited, Err):
@@ -602,7 +735,12 @@ def _run_still_running_text(command: str, state: donewhen.State) -> str:
     )
 
 
-def _attempt_message(bead_id: str, attempt: Attempt, summary: str) -> str:
+def _attempt_label(ref: CardRef, attempt: Attempt) -> str:
+    """Name an attempt in commit subjects: ``t1.2``, or ``2/3 t1.2`` on a split item."""
+    return attempt.key if ref.total == 1 else f"{ref.number}/{ref.total} {attempt.key}"
+
+
+def _attempt_message(bead_id: str, label: str, summary: str) -> str:
     """Build an attempt's commit message: a subject of at most 72 characters, the summary, the trailer.
 
     The ``Bead:`` trailer ties the code to the task's evidence, so it must sit
@@ -610,7 +748,7 @@ def _attempt_message(bead_id: str, attempt: Attempt, summary: str) -> str:
     """
     text = summary.strip()
     first_sentence = re.split(r"(?<=[.!?])\s", text.splitlines()[0], maxsplit=1)[0].rstrip(".!?")
-    prefix = f"{bead_id} ({attempt.key}): "
+    prefix = f"{bead_id} ({label}): "
     subject = prefix + first_sentence
     if len(subject) > MAX_SUBJECT_LENGTH:
         cut = subject[:MAX_SUBJECT_LENGTH]
@@ -637,16 +775,19 @@ def attempt_finish(ctx: Ctx, summary: str | None, blocked: str | None) -> Outcom
     workdir = _workdir(item)
     if isinstance(workdir, Err):
         return workdir
+    scope = _card_scope(ctx, item)
+    if isinstance(scope, Err):
+        return scope
     status = reports.Status.DONE if summary is not None else reports.Status.BLOCKED
     commit = ""
     if status is reports.Status.DONE:
-        made = gitops.commit_all(workdir.value, _attempt_message(item.anchor.bead_id, attempt, text))
+        message = _attempt_message(item.anchor.bead_id, _attempt_label(scope.value.ref, attempt), text)
+        made = gitops.commit_all(workdir.value, message)
         if isinstance(made, Err):
             return made
         commit = made.value or ""
-    layout = _layout(ctx, item)
     rendered = reports.render(reports.Report(item.anchor.bead_id, attempt.tier, status, commit, text))
-    written = _write(layout.report(attempt), rendered)
+    written = _write(scope.value.files.report(attempt), rendered)
     if isinstance(written, Err):
         return written
     closed = _close_step(
@@ -659,21 +800,81 @@ def attempt_finish(ctx: Ctx, summary: str | None, blocked: str | None) -> Outcom
 # --- verify and verdict ------------------------------------------------------
 
 
-def _record_decision(ctx: Ctx, item: Item, attempt: Attempt, decision: Decision, why: str) -> Result[None, str]:
-    values = {f"lite.attempt.{attempt.key}": ("approved" if decision.action is Action.LAND else f"rejected: {why}")}
-    if decision.action is Action.LAND:
-        values["lite.passed_tier"] = attempt.tier.value
+def _item_passed_tier(item: Item, ref: CardRef, tier: Tier) -> Result[str, str]:
+    """Return the tier an item passed at: the most expensive tier any of its cards needed."""
+    tiers = [tier]
+    for number in range(1, ref.number):
+        key = f"lite.card.{number}.passed_tier"
+        earlier = next((t for t in Tier if t.value == item.anchor.meta(key)), None)
+        if earlier is None:
+            return Err(f"{item.anchor.bead_id} has no valid {key}, so card {number} never passed")
+        tiers.append(earlier)
+    top = highest(tiers)
+    return top if isinstance(top, Err) else Ok(top.value.value)
+
+
+def _approved_commit(files: CardLayout, attempt: Attempt) -> Result[str, str]:
+    """Return the commit of an approved attempt, where the next card starts."""
+    text = _read(files.report(attempt))
+    if isinstance(text, Err):
+        return text
+    report = reports.parse(text.value)
+    if isinstance(report, Err):
+        return Err(f"the report of {attempt.key} is invalid: {report.error}")
+    if not report.value.commit:
+        return Err(f"the approved {attempt.key} attempt has no commit")
+    return Ok(report.value.commit)
+
+
+def _decision_metadata(
+    item: Item, scope: CardScope, attempt: Attempt, verdict: Verdict, decision: Decision, why: str
+) -> Result[dict[str, str], str]:
+    """Return what the anchor records about a verified attempt.
+
+    An approval that leaves cards to do moves the anchor to the next card and
+    records where that card starts; the last card's approval records the
+    tier the whole item passed at, which ``land`` requires.
+    """
+    ref = scope.ref
+    approved = verdict is Verdict.APPROVE
+    values = {f"{ref.prefix}attempt.{attempt.key}": "approved" if approved else f"rejected: {why}"}
+    if not approved:
+        values[f"{ref.prefix}last_rejected"] = attempt.key
+    elif ref.is_last:
+        values[f"{ref.prefix}passed_tier"] = attempt.tier.value
+        passed = _item_passed_tier(item, ref, attempt.tier)
+        if isinstance(passed, Err):
+            return passed
+        values["lite.passed_tier"] = passed.value
     else:
-        values["lite.last_rejected"] = attempt.key
+        commit = _approved_commit(scope.files, attempt)
+        if isinstance(commit, Err):
+            return commit
+        following = ref.number + 1
+        values |= {
+            f"{ref.prefix}passed_tier": attempt.tier.value,
+            "lite.card": str(following),
+            _card_base_key(following): commit.value,
+        }
     if decision.action is Action.BLOCKED:
         values["lite.result"] = "blocked"
-    recorded = ctx.gc.set_metadata(item.anchor.bead_id, values)
+    return Ok(values)
+
+
+def _record_decision(
+    ctx: Ctx, item: Item, scope: CardScope, attempt: Attempt, verdict: Verdict, decision: Decision, why: str
+) -> Result[None, str]:
+    values = _decision_metadata(item, scope, attempt, verdict, decision, why)
+    if isinstance(values, Err):
+        return values
+    recorded = ctx.gc.set_metadata(item.anchor.bead_id, values.value)
     if isinstance(recorded, Err):
         return recorded
     if decision.action is Action.T3:
+        which = "" if scope.ref.total == 1 else f" on {scope.ref.label}"
         body = (
-            f"{item.anchor.bead_id} ({item.anchor.title}) failed at t1 and t2: {why}\n"
-            f"Findings: {_layout(ctx, item).findings(attempt)}\n"
+            f"{item.anchor.bead_id} ({item.anchor.title}) failed at t1 and t2{which}: {why}\n"
+            f"Findings: {scope.files.findings(attempt)}\n"
             f"Approve a t3 attempt with: gc superpowers-lite approve --rig {ctx.env.rig} {item.anchor.bead_id}\n"
             "Leave it to keep the item waiting."
         )
@@ -683,22 +884,28 @@ def _record_decision(ctx: Ctx, item: Item, attempt: Attempt, decision: Decision,
     return Ok(None)
 
 
-def _close_verify(ctx: Ctx, item: Item, attempt: Attempt, verdict: Verdict, why: str, retryable: bool = True) -> Outcome:
-    decision = decide(attempt, verdict, retryable)
-    recorded = _record_decision(ctx, item, attempt, decision, why)
+def _close_verify(
+    ctx: Ctx, item: Item, scope: CardScope, attempt: Attempt, verdict: Verdict, why: str, retryable: bool = True
+) -> Outcome:
+    decision = decide(attempt, verdict, retryable, scope.ref.is_last)
+    recorded = _record_decision(ctx, item, scope, attempt, verdict, decision, why)
     if isinstance(recorded, Err):
         return recorded
+    which = "" if scope.ref.total == 1 else f"{scope.ref.label} "
     closed = _close_step(
-        ctx, item.step, decision.outcome, f"{attempt.key} {verdict.value}: {why}"[:500],
+        ctx, item.step, decision.outcome, f"{which}{attempt.key} {verdict.value}: {why}"[:500],
         {"gc.output_json": decision.output_json, "lite.verdict": verdict.value},
     )
     if isinstance(closed, Err):
         return closed
-    next_name = decision.next_attempt.key if decision.next_attempt is not None else decision.action.value
+    if verdict is Verdict.APPROVE and not scope.ref.is_last:
+        next_name = f"t1 on card {scope.ref.number + 1} of {scope.ref.total}"
+    else:
+        next_name = decision.next_attempt.key if decision.next_attempt is not None else decision.action.value
     return Ok(Done(f"Verdict recorded: {verdict.value}; next: {next_name}.", drain=True))
 
 
-def _report_check(layout: Layout, attempt: Attempt, card_id: str) -> tuple[checks.CheckResult, reports.Report | None]:
+def _report_check(layout: CardLayout, attempt: Attempt, card_id: str) -> tuple[checks.CheckResult, reports.Report | None]:
     text = _read(layout.report(attempt))
     if isinstance(text, Err):
         return checks.CheckResult("report-valid", False, (text.error,)), None
@@ -742,7 +949,7 @@ class QuickChecks:
 
 
 def _quick_checks(
-    ctx: Ctx, item: Item, attempt: Attempt, layout: Layout, workdir: Path, card: cards.Card, head: str, state: donewhen.State
+    ctx: Ctx, item: Item, attempt: Attempt, scope: CardScope, workdir: Path, head: str, state: donewhen.State
 ) -> Result[QuickChecks, str]:
     """Run the quick checks, or reuse what an earlier verify of this commit saved.
 
@@ -750,6 +957,7 @@ def _quick_checks(
     once done_when runs, its build products would fail worktree-clean on a
     second verify.
     """
+    layout, card, prefix = scope.files, scope.card, scope.ref.prefix
     report_result, report = _report_check(layout, attempt, item.anchor.bead_id)
     blocked = report is not None and report.status is reports.Status.BLOCKED
     saved = _load_quick(state, head)
@@ -767,8 +975,7 @@ def _quick_checks(
             return clean
         if not clean.value:
             results.append(checks.CheckResult("worktree-clean", False, ("the attempt left uncommitted changes",)))
-        base = item.anchor.meta("lite.base_commit")
-        changes = gitops.diff(workdir, base)
+        changes = gitops.diff(workdir, scope.base)
         if isinstance(changes, Err):
             return changes
         saved_diff = _write(layout.diff(attempt), changes.value.full)
@@ -781,7 +988,7 @@ def _quick_checks(
         log.info("%s %s touches %d files", item.anchor.bead_id, attempt.key, touched)
         recorded = ctx.gc.set_metadata(
             item.anchor.bead_id,
-            {f"lite.card_overlap.{attempt.key}": str(shared), f"lite.files_touched.{attempt.key}": str(touched)},
+            {f"{prefix}card_overlap.{attempt.key}": str(shared), f"{prefix}files_touched.{attempt.key}": str(touched)},
         )
         if isinstance(recorded, Err):
             return recorded
@@ -882,15 +1089,15 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
     workdir = _workdir(item)
     if isinstance(workdir, Err):
         return workdir
-    card = _sealed_card(ctx, item)
-    if isinstance(card, Err):
-        return card
-    layout = _layout(ctx, item)
+    scope = _card_scope(ctx, item)
+    if isinstance(scope, Err):
+        return scope
+    layout = scope.value.files
     head = gitops.rev(workdir.value, "HEAD")
     if isinstance(head, Err):
         return head
     state = donewhen.State(layout.attempt_dir(attempt) / "checks")
-    quick = _quick_checks(ctx, item, attempt, layout, workdir.value, card.value, head.value, state)
+    quick = _quick_checks(ctx, item, attempt, scope.value, workdir.value, head.value, state)
     if isinstance(quick, Err):
         return quick
     results = list(quick.value.results)
@@ -898,7 +1105,7 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
     outside = quick.value.outside
     report = quick.value.report
     if not quick.value.blocked:
-        spec = donewhen.Spec(head.value, card.value.done_when, workdir.value, DONE_WHEN_TIMEOUT_SECONDS)
+        spec = donewhen.Spec(head.value, scope.value.card.done_when, workdir.value, DONE_WHEN_TIMEOUT_SECONDS)
         waited = donewhen.await_result(state, spec, ctx.env.verify_wait_seconds)
         if isinstance(waited, Err):
             return waited
@@ -923,15 +1130,22 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
             return written
         why = "failed checks: " + ", ".join(r.name for r in failed)
         retryable = report is None or report.status is not reports.Status.BLOCKED
-        return _close_verify(ctx, item, attempt, Verdict.REJECT, why, retryable)
+        return _close_verify(ctx, item, scope.value, attempt, Verdict.REJECT, why, retryable)
     marked = ctx.gc.set_metadata(item.step.bead_id, {"lite.checks": "passed", "lite.checks_at": _now()})
     if isinstance(marked, Err):
         return marked
+    ref = scope.value.ref
+    split = (
+        []
+        if ref.total == 1
+        else [f"This is {ref.label}: the diff holds only this card's work, and later cards do the rest."]
+    )
     return Ok(
         Done(
             "\n".join(
                 [
                     f"Every check passed for the {attempt.key} attempt on {item.anchor.bead_id}.",
+                    *split,
                     f"Card: {layout.card}",
                     f"Diff: {layout.diff(attempt)}",
                     f"Executor report: {layout.report(attempt)}",
@@ -993,7 +1207,10 @@ def verdict(ctx: Ctx, choice: Verdict, reason: str | None) -> Outcome:
     attempt = attempt_result.value
     if item.step.meta("lite.checks") != "passed":
         return Err("run `gc superpowers-lite verify` first; a verdict needs passing checks")
-    layout = _layout(ctx, item)
+    scope = _card_scope(ctx, item)
+    if isinstance(scope, Err):
+        return scope
+    layout = scope.value.files
     text = (reason or "approved").strip()
     review = _write(layout.attempt_dir(attempt) / "review.md", f"# {choice.value}\n\n{text}\n")
     if isinstance(review, Err):
@@ -1002,7 +1219,8 @@ def verdict(ctx: Ctx, choice: Verdict, reason: str | None) -> Outcome:
         written = _write(layout.findings(attempt), _findings_text(attempt, [], text))
         if isinstance(written, Err):
             return written
-    return _close_verify(ctx, item, attempt, choice, "review approved" if choice is Verdict.APPROVE else f"review: {text}")
+    why = "review approved" if choice is Verdict.APPROVE else f"review: {text}"
+    return _close_verify(ctx, item, scope.value, attempt, choice, why)
 
 
 # --- approval, land, close ---------------------------------------------------

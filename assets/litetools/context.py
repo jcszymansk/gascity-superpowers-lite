@@ -132,19 +132,77 @@ def claimed_bead_id(env: Env) -> Result[str, str]:
 
 
 @dataclass(frozen=True, slots=True)
-class Layout:
-    """The item's artifact files, outside every repository.
+class CardRef:
+    """The card of an item that its current steps work on.
+
+    A work bead may be cut into several cards, done one after another in the
+    same worktree. The source anchor records how many (``lite.cards``) and
+    which one is current (``lite.card``).
 
     Attributes:
-        root: ``<city>/.gc/artifacts/<rig>/superpowers-lite/<anchor id>``.
+        number: The card's position, from 1.
+        total: How many cards the item has.
+        legacy: True for an item cut before cards were numbered, which has
+            one card at the item's artifact root and no ``lite.cards``.
+    """
+
+    number: int
+    total: int
+    legacy: bool
+
+    @property
+    def is_last(self) -> bool:
+        """True when no card follows this one."""
+        return self.number == self.total
+
+    @property
+    def prefix(self) -> str:
+        """The prefix of this card's metadata on the anchor.
+
+        An item of one card keeps the plain ``lite.`` keys; each card of a
+        split item has its own ``lite.card.<n>.`` keys.
+        """
+        return "lite." if self.total == 1 else f"lite.card.{self.number}."
+
+    @property
+    def label(self) -> str:
+        """``card 2 of 3``."""
+        return f"card {self.number} of {self.total}"
+
+
+def _positive(raw: str) -> int | None:
+    return int(raw) if raw.isdigit() and int(raw) >= 1 else None
+
+
+def card_ref(anchor: Bead, step: Bead) -> Result[CardRef, str]:
+    """Return the card a step works on.
+
+    The step's own ``lite.card``, pinned when it first ran, wins over the
+    anchor's current card, so a step retried after the anchor moved on still
+    finds the card it served.
+    """
+    raw_total = anchor.meta("lite.cards")
+    if not raw_total:
+        return Ok(CardRef(1, 1, True))
+    total = _positive(raw_total)
+    if total is None:
+        return Err(f"source anchor {anchor.bead_id} has no valid lite.cards (got {raw_total!r})")
+    raw_number = step.meta("lite.card") or anchor.meta("lite.card")
+    number = _positive(raw_number)
+    if number is None or number > total:
+        return Err(f"no valid card number for step {step.bead_id} (got {raw_number!r} of {total})")
+    return Ok(CardRef(number, total, False))
+
+
+@dataclass(frozen=True, slots=True)
+class CardLayout:
+    """One card's files: the sealed card and its attempts.
+
+    Attributes:
+        root: ``<item>/cards/<n>``, or the item's root for a legacy card.
     """
 
     root: Path
-
-    @property
-    def card_draft(self) -> Path:
-        """The card as the cutter writes it."""
-        return self.root / "card.draft.md"
 
     @property
     def card(self) -> Path:
@@ -166,6 +224,36 @@ class Layout:
     def findings(self, attempt: Attempt) -> Path:
         """Why ``attempt`` was rejected, for the next attempt."""
         return self.attempt_dir(attempt) / "findings.md"
+
+
+@dataclass(frozen=True, slots=True)
+class Layout:
+    """The item's artifact files, outside every repository.
+
+    ::
+
+        <root>/drafts/1.md, 2.md ...      the cutter's drafts, in card order
+        <root>/cards/<n>/card.md          sealed card n
+        <root>/cards/<n>/attempts/<key>/  report, diff, findings, checks
+
+    Attributes:
+        root: ``<city>/.gc/artifacts/<rig>/superpowers-lite/<anchor id>``.
+    """
+
+    root: Path
+
+    @property
+    def drafts(self) -> Path:
+        """The directory the cutter writes its numbered drafts to."""
+        return self.root / "drafts"
+
+    def draft(self, number: int) -> Path:
+        """The draft of card ``number``."""
+        return self.drafts / f"{number}.md"
+
+    def card(self, ref: CardRef) -> CardLayout:
+        """The files of one card."""
+        return CardLayout(self.root if ref.legacy else self.root / "cards" / str(ref.number))
 
 
 def layout_for(env: Env, anchor_id: str) -> Layout:
