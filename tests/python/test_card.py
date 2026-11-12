@@ -130,10 +130,26 @@ def test_file_paths_must_stay_inside_the_repository(path: str) -> None:
     assert any("file path" in error or "non-empty string" in error for error in errors), errors
 
 
-def test_size_caps() -> None:
-    many = ", ".join(f'"f{i}"' for i in range(card.MAX_FILES + 1))
+def test_files_has_no_cap_and_takes_patterns() -> None:
+    many = ", ".join(f'"src/f{i}.rs"' for i in range(300)) + ', "app/**/*Screen.kt"'
     front = FRONT.replace('["src/parse.rs", "tests/parse.rs"]', f"[{many}]")
-    assert any("the cap is 8" in e for e in errors_of(card.parse(cutter_card(front=front), require_checklist=False)))
+    parsed = card.parse(cutter_card(front=front), require_checklist=False)
+    assert isinstance(parsed, Ok), parsed
+    assert len(parsed.value.files) == 301 and parsed.value.files[-1] == "app/**/*Screen.kt"
+
+
+@pytest.mark.parametrize("pattern", ["../**", "/app/**", "a/**/../../x"])
+def test_file_patterns_must_stay_inside_the_repository(pattern: str) -> None:
+    front = FRONT.replace('["src/parse.rs", "tests/parse.rs"]', f'["{pattern}"]')
+    errors = errors_of(card.parse(cutter_card(front=front), require_checklist=False))
+    assert any("file path" in error for error in errors), errors
+
+
+def test_size_caps() -> None:
+    commands = ", ".join(f'"c{i}"' for i in range(card.MAX_DONE_WHEN + 1))
+    front = FRONT.replace('done_when = ["cargo test --test parse"]', f"done_when = [{commands}]")
+    assert front != FRONT
+    assert any(f"the cap is {card.MAX_DONE_WHEN}" in e for e in errors_of(card.parse(cutter_card(front=front), require_checklist=False)))
     huge = cutter_card(body=BODY + "x" * card.MAX_CARD_BYTES)
     assert errors_of(card.parse(huge, require_checklist=False)) == [
         f"the card is over {card.MAX_CARD_BYTES} bytes; split the task"

@@ -504,7 +504,7 @@ def attempt_start(ctx: Ctx) -> Outcome:
         f"Attempt {attempt.key.upper()} for {item.anchor.bead_id}.",
         f"Worktree (work only here): {workdir.value}",
         f"Card (your whole task): {layout.card}",
-        f"Files you may change: {', '.join(card.value.files)}",
+        f"Files the card expects you to change: {', '.join(card.value.files)}",
     ]
     if attempt.round > 1 and previous.value is not None:
         lines += [
@@ -659,12 +659,14 @@ class QuickChecks:
     Attributes:
         results: Every quick check's result.
         removed: The tests the attempt removes, for the reviewer.
+        outside: The files the attempt touches that the card does not list, for the reviewer.
         report: The executor's report, when it parsed.
         blocked: True when the executor reported a blocker instead of a change.
     """
 
     results: tuple[checks.CheckResult, ...]
     removed: tuple[str, ...]
+    outside: tuple[str, ...]
     report: reports.Report | None
     blocked: bool
 
@@ -683,9 +685,10 @@ def _quick_checks(
     saved = _load_quick(state, head)
     if saved is not None:
         log.info("reusing the quick checks of %s %s at %s", item.anchor.bead_id, attempt.key, head)
-        return Ok(QuickChecks(saved[0], saved[1], report, blocked))
+        return Ok(QuickChecks(saved[0], saved[1], saved[2], report, blocked))
     results = [report_result]
     removed: tuple[str, ...] = ()
+    outside: tuple[str, ...] = ()
     if blocked and report is not None:
         results.append(checks.CheckResult("executor", False, (f"the executor reported a blocker: {report.summary}",)))
     else:
@@ -703,28 +706,36 @@ def _quick_checks(
             return saved_diff
         shared = cards.overlap(card, checks.added_lines(changes.value.unified))
         log.info("card overlap for %s %s: %s lines copied from the card", item.anchor.bead_id, attempt.key, shared)
-        recorded = ctx.gc.set_metadata(item.anchor.bead_id, {f"lite.card_overlap.{attempt.key}": str(shared)})
+        parsed = checks.parse_name_status(changes.value.name_status)
+        touched = len(checks.touched_paths(parsed))
+        log.info("%s %s touches %d files", item.anchor.bead_id, attempt.key, touched)
+        recorded = ctx.gc.set_metadata(
+            item.anchor.bead_id,
+            {f"lite.card_overlap.{attempt.key}": str(shared), f"lite.files_touched.{attempt.key}": str(touched)},
+        )
         if isinstance(recorded, Err):
             return recorded
-        parsed = checks.parse_name_status(changes.value.name_status)
-        if not parsed:
-            results.append(checks.CheckResult("diff-scope", False, ("the attempt changed nothing",)))
-        results.append(checks.diff_scope(parsed, card.files))
+        results.append(checks.non_empty_diff(parsed))
         results.append(checks.no_skip_markers(changes.value.unified))
         removed = checks.removed_tests(parsed, changes.value.unified)
         if removed:
             log.info("%s %s removes tests: %s", item.anchor.bead_id, attempt.key, "; ".join(removed))
-    stored = _store_quick(state, head, results, removed)
+        outside = checks.outside_files(parsed, card.files)
+        if outside:
+            log.info("%s %s touches files the card does not list: %s", item.anchor.bead_id, attempt.key, ", ".join(outside))
+    stored = _store_quick(state, head, results, removed, outside)
     if isinstance(stored, Err):
         return stored
-    return Ok(QuickChecks(tuple(results), removed, report, blocked))
+    return Ok(QuickChecks(tuple(results), removed, outside, report, blocked))
 
 
 def _quick_file(state: donewhen.State) -> Path:
     return state.root / "quick.json"
 
 
-def _load_quick(state: donewhen.State, head: str) -> tuple[tuple[checks.CheckResult, ...], tuple[str, ...]] | None:
+def _load_quick(
+    state: donewhen.State, head: str
+) -> tuple[tuple[checks.CheckResult, ...], tuple[str, ...], tuple[str, ...]] | None:
     try:
         data = json.loads(_quick_file(state).read_text())
     except (OSError, ValueError):
@@ -732,7 +743,10 @@ def _load_quick(state: donewhen.State, head: str) -> tuple[tuple[checks.CheckRes
     if not isinstance(data, dict) or data.get("head") != head:
         return None
     raw_results, raw_removed = data.get("results"), data.get("removed")
-    if not isinstance(raw_results, list) or not isinstance(raw_removed, list):
+    # Saved before files outside the card became review input: those runs failed such files
+    # in the checks instead, so there is nothing to show the reviewer.
+    raw_outside = data.get("outside", [])
+    if not isinstance(raw_results, list) or not isinstance(raw_removed, list) or not isinstance(raw_outside, list):
         return None
     results: list[checks.CheckResult] = []
     for entry in raw_results:
@@ -742,16 +756,21 @@ def _load_quick(state: donewhen.State, head: str) -> tuple[tuple[checks.CheckRes
         if not isinstance(name, str) or not isinstance(passed, bool) or not isinstance(details, list):
             return None
         results.append(checks.CheckResult(name, passed, tuple(str(d) for d in details)))
-    return tuple(results), tuple(str(r) for r in raw_removed)
+    return tuple(results), tuple(str(r) for r in raw_removed), tuple(str(o) for o in raw_outside)
 
 
 def _store_quick(
-    state: donewhen.State, head: str, results: list[checks.CheckResult], removed: tuple[str, ...]
+    state: donewhen.State,
+    head: str,
+    results: list[checks.CheckResult],
+    removed: tuple[str, ...],
+    outside: tuple[str, ...],
 ) -> Result[None, str]:
     data = {
         "head": head,
         "results": [{"name": r.name, "passed": r.passed, "details": list(r.details)} for r in results],
         "removed": list(removed),
+        "outside": list(outside),
     }
     try:
         state.root.mkdir(parents=True, exist_ok=True)
@@ -806,6 +825,7 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
         return quick
     results = list(quick.value.results)
     removed = quick.value.removed
+    outside = quick.value.outside
     report = quick.value.report
     if not quick.value.blocked:
         spec = donewhen.Spec(head.value, card.value.done_when, workdir.value, DONE_WHEN_TIMEOUT_SECONDS)
@@ -848,6 +868,7 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
                     "",
                     "Review the diff against the card's Goal, Steps, Out of scope and Checklist.",
                     *_removed_tests_text(removed),
+                    *_outside_files_text(outside),
                     "Approve when the change does what the card asks and nothing else:",
                     "  gc superpowers-lite verdict approve",
                     "Otherwise name each problem, with file and line:",
@@ -868,6 +889,22 @@ def _removed_tests_text(removed: tuple[str, ...]) -> list[str]:
         *(f"  - {line}" for line in removed),
         "Accept a removal only when the card asks for it, or when the diff deletes or replaces the",
         "code the removed test exercised. Otherwise reject, naming each test that must stay.",
+        "",
+    ]
+
+
+def _outside_files_text(outside: tuple[str, ...]) -> list[str]:
+    """The review instructions for an attempt that touches files the card does not list."""
+    if not outside:
+        return []
+    return [
+        "",
+        "The attempt touches files the card does not list:",
+        *(f"  - {path}" for path in outside),
+        "The executor's report should say why it needed each one. Accept a file only when the",
+        "change needs it to do what the card asks (a caller of a renamed method, a fixture, a",
+        "regenerated baseline) and it does nothing the card's Out of scope rules out. Otherwise",
+        "reject, naming each file that should not change.",
         "",
     ]
 

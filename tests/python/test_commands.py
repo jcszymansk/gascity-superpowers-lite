@@ -610,9 +610,39 @@ def test_failed_checks_retry_t1_without_review(world: World) -> None:
     assert output(world, "s-ver-t1") == {"next": [{"action": "t1", "round": "2"}]}
     assert world.meta(ANCHOR)["lite.last_rejected"] == "t1"
     findings = (world.artifacts / "attempts" / "t1" / "findings.md").read_text()
-    assert "## diff-scope" in findings and "src/other.txt" in findings
     assert "## card-done" in findings
-    assert world.meta(ANCHOR)["lite.attempt.t1"].startswith("rejected: failed checks: diff-scope, card-done")
+    assert "src/other.txt" not in findings
+    assert world.meta(ANCHOR)["lite.attempt.t1"] == "rejected: failed checks: card-done"
+
+
+def test_an_unlisted_file_goes_to_the_reviewer_instead_of_failing_the_checks(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "fixed\n", extra={"src/other.txt": "x\n"})
+    result = verified(world, "t1")
+    assert result.returncode == 0, result.stderr
+    assert world.meta("s-ver-t1")["lite.checks"] == "passed"
+    assert "The attempt touches files the card does not list:" in result.stdout
+    assert "  - src/other.txt" in result.stdout
+    assert "Accept a file only when the" in result.stdout
+    assert world.meta(ANCHOR)["lite.files_touched.t1"] == "2"
+
+
+def test_files_matched_by_a_card_pattern_get_no_unlisted_note(world: World) -> None:
+    sealed(world, CARD.replace('files = ["src/app.txt", "tests/app_test.txt"]', 'files = ["src/**", "tests/app_test.txt"]'))
+    attempted(world, "t1", "fixed\n", extra={"src/deep/other.txt": "x\n"})
+    result = verified(world, "t1")
+    assert result.returncode == 0, result.stderr
+    assert world.meta("s-ver-t1")["lite.checks"] == "passed"
+    assert "does not list" not in result.stdout
+
+
+def test_an_empty_attempt_fails_the_non_empty_diff_check(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "broken\n")
+    result = verified(world, "t1")
+    assert result.returncode == 0, result.stderr
+    findings = (world.artifacts / "attempts" / "t1" / "findings.md").read_text()
+    assert "## non-empty-diff" in findings and "the attempt changed nothing" in findings
 
 
 def test_deleting_a_test_goes_to_the_reviewer_with_the_removal_listed(world: World) -> None:
@@ -635,6 +665,8 @@ def test_an_attempt_that_removes_no_test_gets_no_removal_note(world: World) -> N
     result = verified(world, "t1")
     assert result.returncode == 0, result.stderr
     assert "removes tests" not in result.stdout
+    assert "does not list" not in result.stdout
+    assert world.meta(ANCHOR)["lite.files_touched.t1"] == "1"
 
 
 def test_adding_a_skip_marker_is_rejected_without_review(world: World) -> None:
@@ -665,8 +697,9 @@ def test_a_blocked_attempt_escalates(world: World) -> None:
 
 def test_t1_retry_starts_from_the_rejected_attempt_and_sees_its_findings(world: World) -> None:
     sealed(world)
-    attempted(world, "t1", "fixed\n", extra={"src/other.txt": "x\n"})
+    attempted(world, "t1", "still broken\n", extra={"src/other.txt": "x\n"})
     assert verified(world, "t1").returncode == 0
+    assert world.meta(ANCHOR)["lite.attempt.t1"] == "rejected: failed checks: card-done"
     rejected = world.meta("s-att-t1")["lite.attempt_commit"]
     started = world.claim_and_run("s-att-t1-2", "attempt", "attempt-start", tier="t1", round_="2")
     assert started.returncode == 0, started.stderr

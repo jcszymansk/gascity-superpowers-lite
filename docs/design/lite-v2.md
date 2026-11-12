@@ -202,7 +202,7 @@ a `lite.cards` list).
 | Section | Content |
 |---|---|
 | `goal` | One or two sentences. |
-| `files` | The files the task may create or change. The scope check enforces it. |
+| `files` | The files the change is expected to touch, as paths or patterns (`*` within a directory, `**` across directories). No cap on their number. Files an attempt touches outside the list go to the reviewer. |
 | `interfaces` | Signatures and types to add or change, without bodies. At most 40 lines of code. |
 | `context` | Excerpts of the existing code the change depends on, with paths and line ranges, so the executor does not search. Every line of a code block must exist in the repository. |
 | `steps` | What to change and why, and each test by name with the behaviour it pins down. No code. |
@@ -211,9 +211,13 @@ a `lite.cards` list).
 | `kind` | One of the task kinds below. |
 | `checklist` | The kind's checklist, pasted by a script, not by the model. |
 
-Size cap: a handful of files and about an hour of human work. The schema check rejects a card
-without every section or over the cap; `plan-review` asks whether a junior developer could finish
-each card without asking anything.
+Size: about an hour of human work, judged by effort and risk, never by file count. A rename can
+touch hundreds of files and stay one easy card, and a hard fix can sit in one file. The first
+format capped `files` at 8 exact paths; it refused beads that an attempt handles easily (ntrecv
+nt-di49w.2, 11 files) and failed any attempt that needed a file the cutter could not foresee, so
+it was dropped on 2026-11-12. Verify records `lite.files_touched.<tier>` per attempt, to see
+whether size predicts escalation. The schema check rejects a card without every section;
+`plan-review` asks whether a junior developer could finish each card without asking anything.
 
 Cards hold no implementation or test code. In the first real run (simpletracker, 2026-11-07) the
 cards carried it: 305 of 311 and 378 of 386 added lines were verbatim in the card, and `card-cutter`
@@ -301,7 +305,7 @@ The `verify` command runs every check in the reviewer's session, before the revi
 | `report-valid` | the executor's report is missing or malformed |
 | `executor` | the executor reported a blocker instead of a change |
 | `worktree-clean` | the attempt left uncommitted changes |
-| `diff-scope` | the diff is empty, or touches a file outside `files` |
+| `non-empty-diff` | the diff is empty |
 | `no-skip-markers` | the diff adds a skip or ignore marker |
 | `card-done` | any `done_when` command fails |
 
@@ -328,6 +332,12 @@ a removal only when the card asks for it or the diff deletes or replaces the cod
 exercised. Until 2026-11-10 a removal failed a `tests-intact` check, which no card could
 override, so a bead that removed `MainScreenModel.artworkChanged` and its test could not pass
 at any tier (FreeNetRadio fnr-5pfxs).
+
+Files outside the card's `files` are not a check either. A change can need a file the cutter could
+not foresee (a caller of a renamed method, a fixture, a regenerated baseline), so `verify` lists the
+touched paths no entry covers, the executor says in its report why it needed each, and the reviewer
+accepts one only when the change needs it and the card's Out of scope does not rule it out. Until
+2026-11-12 any such file failed a `diff-scope` check.
 
 Card validity is checked when the card is cut: `cut-card-finish` refuses an invalid card and the
 step stays open until the cutter fixes it. After the checks, `verify` resets the worktree to the

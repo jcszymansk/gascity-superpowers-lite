@@ -2,12 +2,15 @@ Do the task card. Run:
 
     gc superpowers-lite attempt-start
 
-It resets the worktree, then prints the card, the files you may change and,
-after a rejected attempt, why it was rejected. The card is your whole task:
-follow its Steps and Checklist, change only its files, and work only in the
-printed worktree. The card specifies the change and holds no implementation:
-you write the tests and the code, reading the repository as you need. Run every
-`done_when` command until all pass.
+It resets the worktree, then prints the card, the files it expects you to
+change and, after a rejected attempt, why it was rejected. The card is your
+whole task: follow its Steps and Checklist, change the files it lists, and work
+only in the printed worktree. If the work truly needs another file (a caller of
+a renamed method, a fixture), change it and say in your summary which file and
+why; the reviewer judges it. Never touch a file only to improve it. The card
+specifies the change and holds no implementation: you write the tests and the
+code, reading the repository as you need. Run every `done_when` command until
+all pass.
 
 Builds here can run longer than your shell tool waits. Run them in the
 foreground with its longest timeout, and never end your turn while one runs:

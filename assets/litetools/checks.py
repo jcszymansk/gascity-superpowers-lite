@@ -65,16 +65,57 @@ def parse_name_status(output: str) -> tuple[ChangedPath, ...]:
     return tuple(changes)
 
 
-def diff_scope(changes: tuple[ChangedPath, ...], allowed: tuple[str, ...]) -> CheckResult:
-    """Fail when the attempt touched a path the card does not list.
+def _pattern_regex(pattern: str) -> re.Pattern[str]:
+    """Translate a card ``files`` entry into a regex over a whole repository path.
 
-    A rename counts as touching both its old and its new path.
+    ``*`` matches within one path segment, ``?`` one character of a segment, and a
+    segment that is exactly ``**`` matches any number of segments: ``app/**/Foo*.kt``
+    covers ``app/Foo.kt`` and ``app/a/b/FooTest.kt``, and a trailing ``app/**`` covers
+    everything under ``app/``. Anything else is literal, so a plain path matches only itself.
     """
-    permitted = set(allowed)
-    touched = sorted({p for c in changes for p in (c.path, c.old_path)})
-    outside = [path for path in touched if path not in permitted]
-    details = tuple(f"changed a file outside the card's files: {path}" for path in outside)
-    return CheckResult("diff-scope", not outside, details)
+    parts = pattern.split("/")
+    out: list[str] = []
+    for index, part in enumerate(parts):
+        last = index == len(parts) - 1
+        if part == "**":
+            out.append(".+" if last else "(?:[^/]+/)*")
+            continue
+        segment = "".join("[^/]*" if c == "*" else "[^/]" if c == "?" else re.escape(c) for c in part)
+        out.append(segment if last else segment + "/")
+    return re.compile("".join(out))
+
+
+def path_matches(pattern: str, path: str) -> bool:
+    """Return True when the repository path ``path`` is covered by the card entry ``pattern``."""
+    return _pattern_regex(pattern).fullmatch(path) is not None
+
+
+def touched_paths(changes: tuple[ChangedPath, ...]) -> tuple[str, ...]:
+    """Return every path an attempt touched, sorted; a rename touches its old and new path."""
+    return tuple(sorted({p for c in changes for p in (c.path, c.old_path)}))
+
+
+def non_empty_diff(changes: tuple[ChangedPath, ...]) -> CheckResult:
+    """Fail when the attempt changed nothing."""
+    return CheckResult("non-empty-diff", bool(changes), () if changes else ("the attempt changed nothing",))
+
+
+def outside_files(changes: tuple[ChangedPath, ...], allowed: tuple[str, ...]) -> tuple[str, ...]:
+    """List the paths an attempt touched that no entry of the card's ``files`` covers.
+
+    The list is review input, not a check: a change can need a file the cutter could not
+    foresee (a caller of a renamed method, a fixture, a regenerated baseline), and only a
+    reviewer can tell that from wandering off the task.
+
+    Args:
+        changes: The attempt's changed paths.
+        allowed: The card's ``files`` entries, paths or patterns.
+
+    Returns:
+        The uncovered paths, sorted.
+    """
+    regexes = [_pattern_regex(pattern) for pattern in allowed]
+    return tuple(path for path in touched_paths(changes) if not any(r.fullmatch(path) for r in regexes))
 
 
 _TEST_PATH = re.compile(

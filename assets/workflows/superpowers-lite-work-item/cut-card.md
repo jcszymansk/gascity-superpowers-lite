@@ -12,8 +12,13 @@ the card to the printed path:
 
 - `kind`: `bugfix` when the bead reports wrong behaviour, `tdd-feature` when it
   asks for new behaviour.
-- `files`: every file the change may create or touch, tests included. The
-  executor may change nothing else.
+- `files`: every file the change may create or touch, tests included. Use a
+  pattern (`*` within a directory, `**` across directories, as in
+  `app/src/**/*Screen.kt`) for files you cannot name in advance or a change
+  that sweeps many files. There is no limit on how many: a rename may touch
+  hundreds of files and still be one easy card. Judge a card's size by effort
+  and risk, about an hour for a junior developer, never by file count. Files
+  an attempt changes outside the list go to the reviewer.
 - `done_when`: shell commands, run from the worktree root, that pass only when
   the work is done. When the bead lists its own done-when commands, use exactly
   those. Otherwise use as few as prove it, usually one run of the project's

@@ -13,6 +13,12 @@ A card is Markdown with TOML front matter between ``+++`` lines::
     ## Goal
     ...
 
+``files`` lists what the change is expected to touch, as paths or patterns
+(``checks.path_matches``), with no cap on their number: a rename can touch
+hundreds of files with no risk, and a hard fix one file. A card's size is
+judged by effort, not by file count. Files an attempt touches outside the list
+go to the reviewer, not to a check.
+
 The body must hold every section in ``CUTTER_SECTIONS``. ``## Checklist`` is
 never written by a model: ``seal`` pastes the kind's checklist from the pack,
 so every harness and model gets the same text.
@@ -41,7 +47,6 @@ log = logging.getLogger(__name__)
 
 SCHEMA = "lite.card.v1"
 FENCE = "+++"
-MAX_FILES = 8
 MAX_DONE_WHEN = 8
 MAX_CARD_BYTES = 32 * 1024
 MAX_INTERFACE_CODE_LINES = 40
@@ -92,7 +97,7 @@ class Card:
     Attributes:
         card_id: The work bead the card was cut from.
         kind: The task kind, which selects the checklist.
-        files: Repository-relative paths the executor may create or change.
+        files: Repository-relative paths or patterns the change is expected to touch.
         done_when: Shell commands that must all exit 0 in the worktree.
         sections: Body text per section, without the heading line.
     """
@@ -255,13 +260,13 @@ def _relative_path_error(path: str) -> str | None:
     return None
 
 
-def _string_list(meta: dict[str, object], key: str, limit: int) -> Result[tuple[str, ...], str]:
+def _string_list(meta: dict[str, object], key: str, limit: int | None) -> Result[tuple[str, ...], str]:
     value = meta.get(key)
     if not isinstance(value, list) or not value:
         return Err(f"'{key}' must be a non-empty list of strings")
     if not all(isinstance(item, str) and item.strip() for item in value):
         return Err(f"every entry of '{key}' must be a non-empty string")
-    if len(value) > limit:
+    if limit is not None and len(value) > limit:
         return Err(f"'{key}' has {len(value)} entries; the cap is {limit}, so split the task")
     items = tuple(str(item) for item in value)
     if len(set(items)) != len(items):
@@ -305,7 +310,7 @@ def parse(text: str, *, require_checklist: bool) -> Result[Card, list[str]]:
     if kind is None:
         errors.append(f"'kind' must be one of {', '.join(sorted(kinds))}")
 
-    files = _string_list(meta, "files", MAX_FILES)
+    files = _string_list(meta, "files", None)
     if isinstance(files, Err):
         errors.append(files.error)
     else:

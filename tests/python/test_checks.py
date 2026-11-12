@@ -17,24 +17,61 @@ def test_parse_name_status_handles_renames_and_plain_entries() -> None:
     assert checks.parse_name_status("") == ()
 
 
-def test_diff_scope_passes_inside_the_card_files() -> None:
-    result = checks.diff_scope((ChangedPath("M", "src/a.rs", "src/a.rs"),), ("src/a.rs", "tests/a.rs"))
-    assert result.passed and result.details == ()
-    assert result.name == "diff-scope"
+@pytest.mark.parametrize(
+    ("pattern", "path", "expected"),
+    [
+        ("src/a.rs", "src/a.rs", True),
+        ("src/a.rs", "src/a.rs.bak", False),
+        ("src/a.rs", "other/src/a.rs", False),
+        ("src/*.rs", "src/a.rs", True),
+        ("src/*.rs", "src/sub/a.rs", False),
+        ("src/?.rs", "src/a.rs", True),
+        ("src/?.rs", "src/ab.rs", False),
+        ("app/**/Foo*.kt", "app/Foo.kt", True),
+        ("app/**/Foo*.kt", "app/a/b/FooTest.kt", True),
+        ("app/**/Foo*.kt", "lib/a/Foo.kt", False),
+        ("app/**", "app/x", True),
+        ("app/**", "app/a/b/c.png", True),
+        ("app/**", "app", False),
+        ("app/**", "application/x", False),
+        ("**/*.md", "README.md", True),
+        ("**/*.md", "docs/a/b.md", True),
+        ("a.b+c", "a.b+c", True),
+        ("a.b+c", "aXb+c", False),
+    ],
+)
+def test_path_matches(pattern: str, path: str, expected: bool) -> None:
+    assert checks.path_matches(pattern, path) is expected
 
 
-def test_diff_scope_names_every_file_outside_the_card() -> None:
+def test_outside_files_is_empty_when_every_touched_path_is_listed_or_matched() -> None:
+    changes = (ChangedPath("M", "src/a.rs", "src/a.rs"), ChangedPath("A", "tests/deep/b.rs", "tests/deep/b.rs"))
+    assert checks.outside_files(changes, ("src/a.rs", "tests/**")) == ()
+
+
+def test_outside_files_names_every_unlisted_path_and_both_sides_of_a_rename() -> None:
     changes = (
         ChangedPath("M", "src/a.rs", "src/a.rs"),
         ChangedPath("A", "src/extra.rs", "src/extra.rs"),
         ChangedPath("R", "src/a2.rs", "src/old.rs"),
     )
-    result = checks.diff_scope(changes, ("src/a.rs", "src/a2.rs"))
-    assert not result.passed
-    assert result.details == (
-        "changed a file outside the card's files: src/extra.rs",
-        "changed a file outside the card's files: src/old.rs",
+    assert checks.outside_files(changes, ("src/a.rs", "src/a2.rs")) == ("src/extra.rs", "src/old.rs")
+
+
+def test_touched_paths_counts_each_path_once_and_both_sides_of_a_rename() -> None:
+    changes = (
+        ChangedPath("M", "b", "b"),
+        ChangedPath("R", "new", "old"),
+        ChangedPath("M", "b", "b"),
     )
+    assert checks.touched_paths(changes) == ("b", "new", "old")
+
+
+def test_non_empty_diff() -> None:
+    empty = checks.non_empty_diff(())
+    assert empty.name == "non-empty-diff"
+    assert not empty.passed and empty.details == ("the attempt changed nothing",)
+    assert checks.non_empty_diff((ChangedPath("M", "a", "a"),)).passed
 
 
 @pytest.mark.parametrize(

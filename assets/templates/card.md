@@ -2,7 +2,7 @@
 schema = "lite.card.v1"
 id = "{id}"
 kind = "bugfix"                     # bugfix or tdd-feature
-files = ["path/one", "path/two"]    # every file the executor may create or change, at most 8
+files = ["path/one", "path/two/**/*.kt"]    # every file the change may create or touch: paths or patterns, no limit
 done_when = ["exact command"]       # commands that must exit 0 in the worktree, at most 8
 +++
 
