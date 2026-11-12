@@ -226,28 +226,60 @@ def _tail(text: str) -> str:
     return text if len(text) <= OUTPUT_LIMIT else "…" + text[-OUTPUT_LIMIT:]
 
 
+@dataclass(frozen=True, slots=True)
+class CommandOutcome:
+    """How one shell command ended.
+
+    Attributes:
+        command: The command as given.
+        exit_code: Its exit status, or None when it timed out.
+        output: The tail of its combined stdout and stderr.
+    """
+
+    command: str
+    exit_code: int | None
+    output: str
+
+    @property
+    def passed(self) -> bool:
+        """True when the command exited 0."""
+        return self.exit_code == 0
+
+    def finding(self, timeout_seconds: int) -> str:
+        """The line a failed command contributes to the card-done findings."""
+        if self.exit_code is None:
+            return f"timed out after {timeout_seconds}s: {self.command}"
+        return f"exit {self.exit_code}: {self.command}\n{self.output}"
+
+
+def run_command(command: str, workdir: Path, timeout_seconds: int) -> CommandOutcome:
+    """Run ``command`` with ``sh -c`` in ``workdir`` and keep the tail of its output."""
+    log.info("done_when: running %r in %s", command, workdir)
+    try:
+        proc = subprocess.run(
+            ["sh", "-c", command],
+            cwd=workdir,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return CommandOutcome(command, None, "")
+    log.debug("done_when: %r exited %d", command, proc.returncode)
+    return CommandOutcome(command, proc.returncode, _tail((proc.stdout + proc.stderr).strip()))
+
+
+def card_done_from(outcomes: tuple[CommandOutcome, ...], timeout_seconds: int) -> CheckResult:
+    """The card-done check over commands that already ran."""
+    details = tuple(o.finding(timeout_seconds) for o in outcomes if not o.passed)
+    return CheckResult("card-done", not details, details)
+
+
 def card_done(commands: tuple[str, ...], workdir: Path, timeout_seconds: int) -> CheckResult:
     """Run every ``done_when`` command in ``workdir``; fail if any fails.
 
     Every command runs even after a failure, so the findings name all of them.
     """
-    details: list[str] = []
-    for command in commands:
-        log.info("done_when: running %r in %s", command, workdir)
-        try:
-            proc = subprocess.run(
-                ["sh", "-c", command],
-                cwd=workdir,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            details.append(f"timed out after {timeout_seconds}s: {command}")
-            continue
-        log.debug("done_when: %r exited %d", command, proc.returncode)
-        if proc.returncode != 0:
-            output = _tail((proc.stdout + proc.stderr).strip())
-            details.append(f"exit {proc.returncode}: {command}\n{output}")
-    return CheckResult("card-done", not details, tuple(details))
+    outcomes = tuple(run_command(c, workdir, timeout_seconds) for c in commands)
+    return card_done_from(outcomes, timeout_seconds)

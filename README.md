@@ -177,8 +177,10 @@ agents in every rig; rigs need no import of their own.
 Agents never run `bd`, `git commit` or `git push`, and never type a bead id. Each step's text names
 `gc superpowers-lite <command>`, which finds the agent's claimed step, does the work, records the
 result and closes the step: `claim`, `prepare-worktree`, `cut-card-start`, `cut-card-finish`,
-`attempt-start`, `attempt-finish`, `verify`, `verdict`, `approval`, `land` and `close-anchor`.
-The code is in `assets/litetools/`; every command logs to
+`attempt-start`, `attempt-finish`, `run`, `verify`, `verdict`, `approval`, `land` and `close-anchor`.
+Executors run builds and tests through `run '<command>'`, and `verify` runs `done_when`, in a runner
+that outlives the agent's session and is waited for in calls under two minutes, because gc drains
+a session that sits idle at its prompt while it holds a step. The code is in `assets/litetools/`; every command logs to
 `$GC_CITY/.gc/runtime/superpowers-lite/commands.log`.
 
 Tests: `uv sync`, then `uv run pytest` and `uv run mypy`. `tests/step-blocks.test.sh` runs the

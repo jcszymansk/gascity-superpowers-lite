@@ -14,7 +14,7 @@ SLOTS = ("lite-t1", "lite-t2", "lite-t3", "lite-plan", "lite-review", "lite-revi
 STEP_COMMANDS = {
     "prepare-worktree": {"prepare-worktree"},
     "cut-card": {"cut-card-start", "cut-card-finish"},
-    "attempt": {"attempt-start", "attempt-finish"},
+    "attempt": {"attempt-start", "attempt-finish", "run"},
     "verify": {"verify", "verdict"},
     "approval": {"approval"},
     "land": {"land"},

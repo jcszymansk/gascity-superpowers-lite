@@ -7,6 +7,7 @@ closes only that step. Per-item state lives on the source anchor.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -497,15 +498,30 @@ def attempt_start(ctx: Ctx) -> Outcome:
     start = _start_commit(layout, attempt, previous.value, base)
     if isinstance(start, Err):
         return start
-    reset = gitops.reset_to(workdir.value, start.value)
-    if isinstance(reset, Err):
-        return reset
     lines = [
         f"Attempt {attempt.key.upper()} for {item.anchor.bead_id}.",
         f"Worktree (work only here): {workdir.value}",
         f"Card (your whole task): {layout.card}",
         f"Files the card expects you to change: {', '.join(card.value.files)}",
     ]
+    # gc restarts a session that sits idle while it holds this step, and the
+    # new session starts here again: resetting would discard its work.
+    if item.step.meta("lite.attempt_started") == "true":
+        log.info("resuming %s %s without a reset", item.anchor.bead_id, attempt.key)
+        lines += [
+            "",
+            "This attempt was already started by a session that was restarted. The worktree is",
+            "not reset: it holds that session's uncommitted work. Read `git status` and `git diff`",
+            "in it, then continue from there.",
+        ]
+        lines += _attempt_finish_lines()
+        return Ok(Done("\n".join(lines)))
+    reset = gitops.reset_to(workdir.value, start.value)
+    if isinstance(reset, Err):
+        return reset
+    marked = ctx.gc.set_metadata(item.step.bead_id, {"lite.attempt_started": "true"})
+    if isinstance(marked, Err):
+        return marked
     if attempt.round > 1 and previous.value is not None:
         lines += [
             "",
@@ -521,15 +537,69 @@ def attempt_start(ctx: Ctx) -> Outcome:
             f"Its diff, for reference only: {layout.diff(previous.value)}",
             "Do not reapply that diff blindly; fix what the findings name.",
         ]
-    lines += [
+    lines += _attempt_finish_lines()
+    return Ok(Done("\n".join(lines)))
+
+
+def _attempt_finish_lines() -> list[str]:
+    return [
         "",
+        "Run builds and tests through `gc superpowers-lite run '<command>'`.",
         "When every done_when command passes, run:",
         '  gc superpowers-lite attempt-finish --summary "<one paragraph: what you changed and why>"',
         "If the card cannot be done as written, run:",
         '  gc superpowers-lite attempt-finish --blocked "<what stops you>"',
         "Do not commit, push or touch beads yourself; attempt-finish does it.",
     ]
-    return Ok(Done("\n".join(lines)))
+
+
+def run(ctx: Ctx, command: str) -> Outcome:
+    """Run a build or test command for the claimed attempt in a runner that outlives the session.
+
+    The command runs in the item worktree. A call waits under two minutes; when
+    the command is still running it says so, and the same call again attaches
+    to that run. A finished run is reported once; the next call starts afresh.
+    """
+    if not command.strip():
+        return Err("run needs a command")
+    found = _claimed_step(ctx, "attempt")
+    if isinstance(found, Err):
+        return found
+    item = found.value
+    attempt = step_attempt(item.step)
+    if isinstance(attempt, Err):
+        return attempt
+    workdir = _workdir(item)
+    if isinstance(workdir, Err):
+        return workdir
+    key = hashlib.sha256(command.encode()).hexdigest()[:16]
+    state = donewhen.State(_layout(ctx, item).attempt_dir(attempt.value) / "runs" / key)
+    spec = donewhen.Spec("", (command,), workdir.value, DONE_WHEN_TIMEOUT_SECONDS)
+    waited = donewhen.await_outcomes(state, spec, ctx.env.verify_wait_seconds)
+    if isinstance(waited, Err):
+        return waited
+    if waited.value is None:
+        return Ok(Done(_run_still_running_text(command, state)))
+    outcome = waited.value[0]
+    donewhen.forget(state)
+    if outcome.exit_code is None:
+        head = f"Timed out after {DONE_WHEN_TIMEOUT_SECONDS}s: {command}"
+    else:
+        head = f"Exit {outcome.exit_code}{' (passed)' if outcome.passed else ' (failed)'}: {command}"
+    return Ok(Done("\n".join([head, "", outcome.output])))
+
+
+def _run_still_running_text(command: str, state: donewhen.State) -> str:
+    return "\n".join(
+        [
+            f"Still running in the background, and it survives this session: {command}",
+            f"Its log: {state.log_file}",
+            "Run the same `gc superpowers-lite run` again now, and keep doing so until it prints",
+            "the exit status. Do not end your turn while it runs: gc restarts a session that sits",
+            "idle at its prompt while it holds this step. If you changed files after it started,",
+            "run it once more after it finishes.",
+        ]
+    )
 
 
 def _attempt_message(bead_id: str, attempt: Attempt, summary: str) -> str:

@@ -456,6 +456,54 @@ def test_cut_card_blocked_fails_the_item(world: World) -> None:
 # --- attempts, verify and verdict --------------------------------------------------
 
 
+def test_a_restarted_session_resumes_the_attempt_without_a_reset(world: World) -> None:
+    sealed(world)
+    first = world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
+    assert first.returncode == 0, first.stderr
+    assert "already started" not in first.stdout
+    assert world.meta("s-att-t1")["lite.attempt_started"] == "true"
+    (world.worktree / "src" / "app.txt").write_text("half done\n")
+    again = world.run("attempt-start")
+    assert again.returncode == 0, again.stderr
+    assert "already started by a session that was restarted" in again.stdout
+    assert (world.worktree / "src" / "app.txt").read_text() == "half done\n"
+
+
+def test_run_reports_the_exit_status_and_output_from_the_worktree(world: World) -> None:
+    sealed(world)
+    world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
+    failed = world.run("run", "pwd && exit 3")
+    assert failed.returncode == 0, failed.stderr
+    assert failed.stdout.startswith("Exit 3 (failed): pwd && exit 3")
+    assert str(world.worktree) in failed.stdout
+    passed = world.run("run", "echo fine")
+    assert passed.stdout.startswith("Exit 0 (passed): echo fine") and "fine" in passed.stdout
+
+
+def test_run_attaches_to_a_running_command_and_reports_it_once(world: World) -> None:
+    sealed(world)
+    world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
+    counter = world.tmp / "run_count"
+    command = f"sleep 2 && echo ran >> {counter} && echo done"
+    first = world.run("run", command, env=SHORT_WAIT)
+    assert first.returncode == 0, first.stderr
+    assert first.stdout.startswith("Still running") and "Do not end your turn" in first.stdout
+    second = world.run("run", command)
+    assert second.stdout.startswith("Exit 0 (passed)") and "done" in second.stdout
+    assert counter.read_text().splitlines() == ["ran"]
+    world.run("run", command)
+    assert counter.read_text().splitlines() == ["ran", "ran"]
+
+
+def test_run_needs_a_claimed_attempt_and_a_command(world: World) -> None:
+    sealed(world)
+    unclaimed = world.run("run", "true")
+    assert unclaimed.returncode == 1
+    world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
+    empty = world.run("run", "  ")
+    assert empty.returncode == 1 and "run needs a command" in empty.stderr
+
+
 def test_attempt_finish_commits_and_reports(world: World) -> None:
     sealed(world)
     attempted(world, "t1", "fixed\n")

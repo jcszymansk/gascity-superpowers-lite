@@ -123,16 +123,37 @@ def _write_atomic(path: Path, data: object) -> None:
     tmp.replace(path)
 
 
-def result(state: State, spec: Spec) -> checks.CheckResult | None:
-    """Return the finished outcome of this run, or None when there is none yet."""
+def outcomes(state: State, spec: Spec) -> tuple[checks.CommandOutcome, ...] | None:
+    """Return how each command of this finished run ended, or None when it has not finished."""
     data = _load(state.result_file)
     if not spec.matches(data) or not isinstance(data, dict):
         return None
-    details = data.get("details")
-    if not isinstance(details, list) or not all(isinstance(d, str) for d in details):
+    raw = data.get("outcomes")
+    if not isinstance(raw, list) or len(raw) != len(spec.commands):
         log.warning("checks result %s is malformed; it will be run again", state.result_file)
         return None
-    return checks.CheckResult("card-done", not details, tuple(details))
+    parsed: list[checks.CommandOutcome] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            return None
+        command, code, output = entry.get("command"), entry.get("exit_code"), entry.get("output")
+        if not isinstance(command, str) or not (code is None or isinstance(code, int)) or not isinstance(output, str):
+            log.warning("checks result %s is malformed; it will be run again", state.result_file)
+            return None
+        parsed.append(checks.CommandOutcome(command, code, output))
+    return tuple(parsed)
+
+
+def result(state: State, spec: Spec) -> checks.CheckResult | None:
+    """Return the card-done check of this finished run, or None when it has not finished."""
+    finished = outcomes(state, spec)
+    return None if finished is None else checks.card_done_from(finished, spec.timeout_seconds)
+
+
+def forget(state: State) -> None:
+    """Drop the run's record and result, so the next request starts a new run."""
+    for path in (state.result_file, state.run_file, state.pid_file):
+        path.unlink(missing_ok=True)
 
 
 def _pid_alive(pid: int) -> bool:
@@ -228,16 +249,21 @@ def run_detached(root: Path) -> int:
         print(f"done-when-run: malformed run record {state.run_file}", file=sys.stderr)
         return 1
     state.pid_file.write_text(f"{os.getpid()}\n")
-    outcome = checks.card_done(tuple(commands), Path(workdir), timeout_seconds)
+    ran = [checks.run_command(c, Path(workdir), timeout_seconds) for c in commands]
     current = _load(state.run_file)
     if not isinstance(current, dict) or current.get("started_at") != data.get("started_at"):
         log.info("the run in %s was replaced while this runner worked; its result is dropped", root)
         return 0
     _write_atomic(
         state.result_file,
-        {"head": data.get("head"), "commands": commands, "details": list(outcome.details), "finished_at": time.time()},
+        {
+            "head": data.get("head"),
+            "commands": commands,
+            "outcomes": [{"command": o.command, "exit_code": o.exit_code, "output": o.output} for o in ran],
+            "finished_at": time.time(),
+        },
     )
-    print(f"done-when-run: finished, {'passed' if outcome.passed else 'failed'}", flush=True)
+    print(f"done-when-run: finished, {'passed' if all(o.passed for o in ran) else 'failed'}", flush=True)
     return 0
 
 
@@ -273,16 +299,18 @@ def _probe(argv: list[str]) -> bool:
         return False
 
 
-def await_result(state: State, spec: Spec, budget_seconds: float) -> Result[checks.CheckResult | None, str]:
+def await_outcomes(
+    state: State, spec: Spec, budget_seconds: float
+) -> Result[tuple[checks.CommandOutcome, ...] | None, str]:
     """Attach to this run, starting it if needed, and wait up to ``budget_seconds``.
 
     Returns:
-        The outcome when the run finished in time, None while it still runs.
+        How each command ended when the run finished in time, None while it still runs.
     """
     deadline = time.monotonic() + budget_seconds
     poll = FIRST_POLL_SECONDS
     while True:
-        finished = result(state, spec)
+        finished = outcomes(state, spec)
         if finished is not None:
             return Ok(finished)
         if not running(state, spec, time.time()):
@@ -293,3 +321,11 @@ def await_result(state: State, spec: Spec, budget_seconds: float) -> Result[chec
             return Ok(None)
         time.sleep(min(poll, max(0.0, deadline - time.monotonic())))
         poll = min(poll * 2, MAX_POLL_SECONDS)
+
+
+def await_result(state: State, spec: Spec, budget_seconds: float) -> Result[checks.CheckResult | None, str]:
+    """``await_outcomes`` as the card-done check."""
+    waited = await_outcomes(state, spec, budget_seconds)
+    if isinstance(waited, Err):
+        return waited
+    return Ok(None if waited.value is None else checks.card_done_from(waited.value, spec.timeout_seconds))

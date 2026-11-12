@@ -29,6 +29,8 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("claim", "prepare-worktree", "cut-card-start", "attempt-start", "verify", "approval", "land", "close-anchor"):
         sub.add_parser(name)
+    run_cmd = sub.add_parser("run")
+    run_cmd.add_argument("shell_command")
     runner = sub.add_parser("done-when-run", help=argparse.SUPPRESS)
     runner.add_argument("state_dir")
     finish_card = sub.add_parser("cut-card-finish")
@@ -83,6 +85,8 @@ def _dispatch(ctx: Ctx, args: argparse.Namespace) -> Outcome:
         return commands.cut_card_finish(ctx, args.blocked)
     if args.command == "attempt-finish":
         return commands.attempt_finish(ctx, args.summary, args.blocked)
+    if args.command == "run":
+        return commands.run(ctx, args.shell_command)
     if args.command == "verdict":
         return commands.verdict(ctx, Verdict(args.choice), args.reason)
     return Err(f"no handler for {args.command}")

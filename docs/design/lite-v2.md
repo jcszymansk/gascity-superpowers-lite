@@ -326,6 +326,13 @@ This exists because gc 1.5.1 drains a pool session that holds a claimed step whi
 prompt for 90 seconds (its execution backstop), and that drain killed a reviewer waiting on a
 backgrounded `verify`: fnr-lka81.1's review restarted nine times in 45 minutes and never finished.
 
+Executors face the same drain: a build they start in the background while they wait at the
+prompt is killed with them, and the restarted session used to run `attempt-start` again, which
+reset the worktree and threw the work away (fnr-lka81.2). So `run '<command>'` runs a build or
+test in the same scoped runner, keyed by the command, and reports its exit status and output tail
+once; `attempt-start` marks the step `lite.attempt_started` and, on a step already started, keeps
+the worktree and tells the restarted session to continue from it.
+
 Removed tests are not a check. A fix that deletes code also deletes that code's tests, so
 `verify` lists deleted test files and test declarations removed on net, and the reviewer accepts
 a removal only when the card asks for it or the diff deletes or replaces the code the test
@@ -369,7 +376,7 @@ Two conditions, both documented in the README:
 
 This also retires v1's inlined land block, and the 4096-byte step text limit stops constraining
 it. Phase 1 commands: `claim`, `prepare-worktree`, `cut-card-start`, `cut-card-finish`,
-`attempt-start`, `attempt-finish`, `verify`, `verdict`, `approval`, `approve`, `land` and
+`attempt-start`, `attempt-finish`, `run`, `verify`, `verdict`, `approval`, `approve`, `land` and
 `close-anchor`. `claim` wraps `gc hook --claim --drain-ack --json` and remembers the claimed step
 in a file keyed by session, so later commands need no bead id. Every `bd` call passes
 `--rig $GC_RIG`, because a worktree outside the rig would make gc pick the wrong store.

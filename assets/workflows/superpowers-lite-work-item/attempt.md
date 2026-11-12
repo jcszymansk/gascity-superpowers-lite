@@ -12,12 +12,18 @@ specifies the change and holds no implementation: you write the tests and the
 code, reading the repository as you need. Run every `done_when` command until
 all pass.
 
-Builds here can run longer than your shell tool waits. Run them in the
-foreground with its longest timeout, and never end your turn while one runs:
-gc restarts a session that sits idle at its prompt while it holds this step,
-and the restart kills the build. If a command must outlast one tool call, start
-it detached with its output in a file, then wait for it in the foreground in
-calls shorter than the tool's limit.
+Run every build and test command, `done_when` included, through:
+
+    gc superpowers-lite run '<command>'
+
+It runs the command in the worktree, in a process that survives this session,
+and prints the exit status and the output's tail. When the command takes
+longer than two minutes it says it is still running: run the same line again
+at once, and keep doing so until it prints the exit status. Never end your
+turn while a command runs, and never leave a command in the background to wait
+for it: gc restarts a session that sits idle at its prompt while it holds this
+step. If this session is a restarted one, attempt-start says so and keeps the
+work already in the worktree.
 
 Finish with exactly one of these, then exit:
 
