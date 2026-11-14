@@ -18,7 +18,7 @@ from enum import Enum
 from pathlib import Path
 
 from litetools import card as cards
-from litetools import checks, donewhen, gitops
+from litetools import budget, checks, donewhen, gitops
 from litetools import report as reports
 from litetools.context import (
     CardLayout,
@@ -328,6 +328,16 @@ def prepare_worktree(ctx: Ctx) -> Outcome:
     return closed if isinstance(closed, Err) else Ok(Done(f"Prepared: {prepared.value}.", drain=True))
 
 
+def _resolve_budget(ctx: Ctx, item: Item) -> Result[budget.Budget, str]:
+    """Resolve the item's ladder budget from its formula vars, the city env and the pack defaults."""
+    formula_vars = {s.var_name: item.root.meta(f"gc.var.{s.var_name}") for s in budget.SETTINGS}
+    resolved = budget.resolve(formula_vars, ctx.env.budget_env)
+    if isinstance(resolved, Err):
+        return Err("invalid ladder budget: " + "; ".join(resolved.error))
+    log.info("item %s budget: %s", item.anchor.bead_id, resolved.value.summary())
+    return Ok(resolved.value)
+
+
 def _unlanded_blockers(anchor: Bead) -> list[str]:
     """Describe each ``blocks`` predecessor of ``anchor`` that has not landed.
 
@@ -353,6 +363,9 @@ def _prepare(ctx: Ctx, item: Item) -> Result[str, str]:
         if isinstance(marked, Err):
             return marked
         return Err(f"skipped: {anchor.bead_id} is blocked by work that did not land: {', '.join(unlanded)}")
+    resolved = _resolve_budget(ctx, item)
+    if isinstance(resolved, Err):
+        return resolved
     default = _default_branch(ctx)
     if isinstance(default, Err):
         return default
@@ -401,6 +414,7 @@ def _prepare(ctx: Ctx, item: Item) -> Result[str, str]:
         "target": target,
         "lite.base_commit": base_commit,
         "lite.artifact_dir": str(layout.root),
+        **resolved.value.metadata(),
     }
     for bead_id, values in ((anchor.bead_id, recorded_meta), (item.root.bead_id, {"lite.anchor_id": anchor.bead_id})):
         updated = ctx.gc.set_metadata(bead_id, values)

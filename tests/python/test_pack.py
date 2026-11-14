@@ -7,6 +7,8 @@ from typing import Any
 
 import pytest
 
+from litetools import budget
+
 PACK = Path(__file__).resolve().parents[2]
 V2_FORMULAS = ("superpowers-lite-work", "superpowers-lite-work-item", "superpowers-lite-next")
 AGENTS = ("operator", "card-cutter", "executor-t1", "executor-t2", "executor-t3", "card-reviewer")
@@ -143,3 +145,10 @@ def test_slots_set_model_and_effort_or_inherit() -> None:
         else:
             assert set(slot["option_defaults"]) >= {"model", "effort"}, name
             assert slot["option_defaults"]["model"].startswith("claude-"), name
+
+
+def test_the_work_formula_declares_every_budget_var_unset() -> None:
+    declared = _toml(PACK / "formulas" / "superpowers-lite-work.formula.toml")["vars"]
+    for setting in budget.SETTINGS:
+        assert declared[setting.var_name]["default"] == ""
+        assert "1 to 10" in declared[setting.var_name]["description"]

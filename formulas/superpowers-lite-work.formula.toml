@@ -15,6 +15,35 @@ target_required = true
 name = "superpowers-lite-work"
 description = "Drain work beads through card cutting, tiered attempts, checks, one review and a compare-and-swap land."
 
+# Ladder budget: attempts (fresh starts from the card's base) and rounds
+# (executor sessions within one attempt) per tier. Empty means unset: the
+# city's [workspace] env (LITE_T1_ROUNDS and so on), else the pack default
+# (t1 1x2, t2 1x1, t3 1x1). Set them per rig in formula_vars or per convoy
+# with --var; prepare-worktree records each item's budget on its work bead.
+[vars.lite_t1_attempts]
+description = "T1 attempts: fresh starts from the card's base, 1 to 10."
+default = ""
+
+[vars.lite_t1_rounds]
+description = "T1 rounds: executor sessions per attempt, 1 to 10."
+default = ""
+
+[vars.lite_t2_attempts]
+description = "T2 attempts: fresh starts from the card's base, 1 to 10."
+default = ""
+
+[vars.lite_t2_rounds]
+description = "T2 rounds: executor sessions per attempt, 1 to 10."
+default = ""
+
+[vars.lite_t3_attempts]
+description = "T3 attempts: fresh starts from the card's base, 1 to 10."
+default = ""
+
+[vars.lite_t3_rounds]
+description = "T3 rounds: executor sessions per attempt, 1 to 10."
+default = ""
+
 [[steps]]
 id = "drain"
 title = "Drain work beads, one item workflow each"

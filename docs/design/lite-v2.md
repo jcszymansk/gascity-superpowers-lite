@@ -562,9 +562,12 @@ agent whose provider only sleeps, and a pack command that prints its environment
 them (it showed `(rig default="3")` in the probe); empty means unset. The `lite_` prefix keeps them apart from other formulas' vars, since a
 rig's `formula_vars` reach every formula slung in that rig.
 
-The budget is resolved once per item. `prepare-worktree` reads the item root's vars and its own
-environment, validates every value and records it on the anchor with its source:
-`lite.budget.t1.rounds = 3`, `lite.budget.t1.rounds.source = rig`. `verify` reads only the anchor,
+The budget is resolved once per item (built 2026-11-14, `litetools/budget.py`).
+`prepare-worktree` reads the item root's `gc.var.lite_*` and its own environment, validates every
+value and records it on the anchor with its source: `lite.budget.t1.rounds = 3`,
+`lite.budget.t1.rounds.source = var`. The source is `var`, `env` or `pack`: gc stamps a sling
+`--var` and a rig's `formula_vars` on the root the same way, so lite cannot tell them apart.
+`verify` reads only the anchor,
 so a config edit during a run does not change the ladder of an item already running, and every
 item shows the budget it ran with. A value that is not a whole number from 1 to 10 fails
 `prepare-worktree` with the setting and its source named; there is no silent fallback to the

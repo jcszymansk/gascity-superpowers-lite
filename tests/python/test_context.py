@@ -68,3 +68,8 @@ def test_load_env_reads_the_slot_the_session_runs_on() -> None:
 def test_load_env_leaves_the_slot_empty_when_gc_sets_none() -> None:
     env = load_env(AGENT_ENV)
     assert isinstance(env, Ok) and env.value.provider == ""
+
+
+def test_load_env_keeps_only_the_budget_settings_the_city_sets() -> None:
+    env = load_env({**AGENT_ENV, "LITE_T1_ROUNDS": "3", "LITE_T3_ATTEMPTS": "", "LITE_VERIFY_WAIT_SECONDS": "5"})
+    assert isinstance(env, Ok) and env.value.budget_env == {"LITE_T1_ROUNDS": "3", "LITE_T3_ATTEMPTS": ""}

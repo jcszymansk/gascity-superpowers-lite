@@ -222,6 +222,43 @@ def test_prepare_worktree_uses_the_parent_convoy_target_and_refuses_the_default_
     assert "only a human merges into it" in world.bead("s-prep")["close_reason"]
 
 
+def test_prepare_worktree_records_the_pack_default_budget(world: World) -> None:
+    prepared(world)
+    meta = world.meta(ANCHOR)
+    assert meta["lite.budget.t1.attempts"] == "1" and meta["lite.budget.t1.rounds"] == "2"
+    for tier in ("t2", "t3"):
+        assert meta[f"lite.budget.{tier}.attempts"] == "1" and meta[f"lite.budget.{tier}.rounds"] == "1"
+    assert {meta[f"lite.budget.{t}.{k}.source"] for t in ("t1", "t2", "t3") for k in ("attempts", "rounds")} == {"pack"}
+
+
+def test_prepare_worktree_takes_the_budget_from_formula_vars_then_city_env(world: World) -> None:
+    state = world.state
+    state["beads"][ROOT]["metadata"].update({"gc.var.lite_t1_rounds": "3", "gc.var.lite_t2_attempts": " "})
+    world.save(state)
+    city_env = {"LITE_T1_ROUNDS": "4", "LITE_T2_ATTEMPTS": "2", "LITE_T3_ROUNDS": "5"}
+    result = world.claim_and_run("s-prep", "prepare-worktree", "prepare-worktree", env=city_env)
+    assert result.returncode == 0, result.stderr
+    meta = world.meta(ANCHOR)
+    assert (meta["lite.budget.t1.rounds"], meta["lite.budget.t1.rounds.source"]) == ("3", "var")
+    assert (meta["lite.budget.t2.attempts"], meta["lite.budget.t2.attempts.source"]) == ("2", "env")
+    assert (meta["lite.budget.t3.rounds"], meta["lite.budget.t3.rounds.source"]) == ("5", "env")
+    assert (meta["lite.budget.t3.attempts"], meta["lite.budget.t3.attempts.source"]) == ("1", "pack")
+
+
+def test_prepare_worktree_fails_an_invalid_budget_before_making_a_worktree(world: World) -> None:
+    state = world.state
+    state["beads"][ROOT]["metadata"]["gc.var.lite_t1_rounds"] = "30"
+    world.save(state)
+    result = world.claim_and_run("s-prep", "prepare-worktree", "prepare-worktree", env={"LITE_T3_ATTEMPTS": "0"})
+    assert result.returncode == 0
+    assert world.meta("s-prep")["gc.outcome"] == "fail"
+    reason = world.bead("s-prep")["close_reason"]
+    assert "formula var lite_t1_rounds is '30'" in reason
+    assert "city env LITE_T3_ATTEMPTS is '0'" in reason
+    assert not world.worktree.exists()
+    assert not any(key.startswith("lite.budget.") for key in world.meta(ANCHOR))
+
+
 def test_verify_closes_failed_when_the_checks_cannot_run(world: World) -> None:
     prepared(world)
     result = verified(world, "t1")

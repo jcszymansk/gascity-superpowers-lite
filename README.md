@@ -91,7 +91,8 @@ gc sling <rig>/superpowers-lite.operator <convoy> --on superpowers-lite-work
 
 Each bead becomes one item, run by the pack's own agents, each step in a fresh session:
 
-1. `operator` creates the item's worktree at `$GC_CITY/.gc/worktrees/<rig>/<bead>`.
+1. `operator` creates the item's worktree at `$GC_CITY/.gc/worktrees/<rig>/<bead>` and records
+   the item's ladder budget (see `docs/design/lite-v2.md`, "Configuring the budget").
 2. `card-cutter` turns the bead into task cards: the files the change may touch (paths or
    `*`/`**` patterns, any number; files an attempt changes beyond them go to the reviewer), the existing
    code it depends on, numbered steps, and `done_when` commands that pass only when the work is
@@ -145,7 +146,9 @@ added lines of 12 or more characters appear verbatim in the card, such as `4/333
 `lite.files_touched.<attempt>`, per attempt the sessions and slots that executed and reviewed
 it with their times (`lite.attempt.<attempt>.executor_sessions`, `.executor_provider`,
 `.started_at`, `.finished_at`, `.reviewer_sessions`, `.reviewer_provider`, `.review_started_at`,
-`.done_when_seconds`, `.verified_at`), and `lite.result` (`landed`, `blocked`, `uncuttable`,
+`.done_when_seconds`, `.verified_at`), the ladder budget with its source
+(`lite.budget.<tier>.attempts`, `lite.budget.<tier>.rounds`, each with a `.source` of `var`, `env`
+or `pack`), and `lite.result` (`landed`, `blocked`, `uncuttable`,
 `land-refused` or `skipped`). An item of several cards keeps the per-card entries under
 `lite.card.<n>.` instead (`lite.card.2.attempt.t1`, `lite.card.2.passed_tier`, and
 `lite.card.<n>.base_commit` for where card n starts), and its `lite.passed_tier` is the highest tier

@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
 
+from litetools import budget
 from litetools.gc import Bead, Gc
 from litetools.ladder import Attempt, attempt_of
 from litetools.result import Err, Ok, Result
@@ -45,6 +46,9 @@ class Env:
         pack_dir: ``GC_PACK_DIR``.
         provider: ``GC_PROVIDER``, the slot the session runs on, or empty
             when gc did not set it.
+        budget_env: The ladder budget settings the city sets in its
+            ``[workspace] env`` (``LITE_T1_ROUNDS`` and so on), by name;
+            only those that are set.
         verify_wait_seconds: How long one ``verify`` waits for ``done_when``
             (``LITE_VERIFY_WAIT_SECONDS``, default 100).
     """
@@ -57,6 +61,7 @@ class Env:
     route: str
     pack_dir: Path
     provider: str = ""
+    budget_env: Mapping[str, str] = field(default_factory=dict)
     verify_wait_seconds: float = DEFAULT_VERIFY_WAIT_SECONDS
 
 
@@ -93,6 +98,7 @@ def load_env(environ: Mapping[str, str]) -> Result[Env, str]:
             route=environ.get("GC_TEMPLATE", "").strip(),
             pack_dir=Path(environ["GC_PACK_DIR"]),
             provider=environ.get("GC_PROVIDER", "").strip(),
+            budget_env={s.env_name: environ[s.env_name] for s in budget.SETTINGS if s.env_name in environ},
             verify_wait_seconds=verify_wait,
         )
     )
