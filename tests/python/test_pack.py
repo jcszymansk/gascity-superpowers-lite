@@ -70,22 +70,31 @@ def test_step_kinds_match_the_commands_that_check_them() -> None:
     assert used == expected == set(STEP_COMMANDS)
 
 
-def test_tiered_steps_carry_their_tier_and_round() -> None:
+def test_tiered_steps_carry_their_tier_attempt_and_round() -> None:
     for name in V2_FORMULAS[1:]:
         for step in _steps(name):
             if step["metadata"]["lite.step"] in {"attempt", "verify"}:
                 assert step["metadata"]["lite.tier"] in {"t1", "{action}"}, step["id"]
                 if step["metadata"]["lite.tier"] == "{action}":
+                    assert step["metadata"]["lite.attempt_number"] == "{attempt}", step["id"]
                     assert step["metadata"]["lite.round"] == "{round}", step["id"]
 
 
-def test_every_verify_bond_passes_action_and_round() -> None:
+def test_every_verify_bond_passes_the_whole_decision() -> None:
     bonds = [step["on_complete"] for name in V2_FORMULAS[1:] for step in _steps(name) if "on_complete" in step]
     assert len(bonds) == 2
     for bond in bonds:
         assert bond["bond"] == "superpowers-lite-next" and bond["for_each"] == "output.next"
-        assert bond["vars"]["action"] == "{item.action}" and bond["vars"]["round"] == "{item.round}"
-    assert _toml(PACK / "formulas" / "superpowers-lite-next.formula.toml")["vars"]["round"]["default"] == "1"
+        for var in ("action", "attempt", "round", "gate"):
+            assert bond["vars"][var] == f"{{item.{var}}}", var
+    declared = _toml(PACK / "formulas" / "superpowers-lite-next.formula.toml")["vars"]
+    assert (declared["attempt"]["default"], declared["round"]["default"], declared["gate"]["default"]) == ("1", "1", "no")
+
+
+def test_only_the_gate_var_opens_the_human_gate() -> None:
+    approve = [s for s in _steps("superpowers-lite-next") if s["metadata"]["lite.step"] == "approval"]
+    assert len(approve) == 1
+    assert approve[0]["condition"] == "{{gate}} == yes" and approve[0]["gate"]["type"] == "human"
 
 
 def test_every_item_step_aborts_the_item_scope_when_it_fails() -> None:

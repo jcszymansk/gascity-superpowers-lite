@@ -22,7 +22,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
-from litetools.ladder import Tier
+from litetools.ladder import Tier, TierLimits
 from litetools.result import Err, Ok, Result
 
 MAX_SETTING = 10
@@ -113,6 +113,10 @@ class Budget:
     def limit(self, tier: Tier, kind: Kind) -> Limit:
         """Return the limit of ``tier``'s ``kind``."""
         return self.limits[Setting(tier, kind)]
+
+    def tier_limits(self, tier: Tier) -> TierLimits:
+        """Return the attempts and rounds of ``tier``, as the ladder takes them."""
+        return TierLimits(self.limit(tier, Kind.ATTEMPTS).value, self.limit(tier, Kind.ROUNDS).value)
 
     def metadata(self) -> dict[str, str]:
         """Return the work bead records of every setting."""

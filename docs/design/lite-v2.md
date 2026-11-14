@@ -445,8 +445,9 @@ in a file keyed by session, so later commands need no bead id. Every `bd` call p
 
 ## Ladder budgets, verdicts and reviewers
 
-Status: proposed 2026-11-14, not built. Once built, it replaces the fixed ladder described in
-"Per-item loop".
+Status: proposed 2026-11-14. Logging, the budget and the three verdicts are built (2026-11-14);
+the per-tier reviewers are not. The ladder below replaces the fixed one described in "Per-item
+loop".
 
 Three things about the current ladder are fixed that should not be:
 
@@ -469,8 +470,11 @@ Three things about the current ladder are fixed that should not be:
   round continues from the previous round's commit and fixes what its findings name.
 
 Each tier has a budget of `attempts` × `rounds`. Attempt keys name both, leaving out a part
-equal to 1: `t1`, `t1.r2`, `t1.a2`, `t1.a2.r3`. `parse_attempt` keeps reading the old `t1.2` as
-`t1.r2`, so items that started before the change finish on their recorded keys.
+equal to 1: `t1`, `t1.r2`, `t1.a2`, `t1.a2.r3`. Steps carry the attempt in `lite.attempt_number`
+next to `lite.tier` and `lite.round`. The old `t1.2` key is not read: its artifacts sit under
+`attempts/t1.2/`, so parsing it alone would not let an item started before the change finish.
+Drain every `superpowers-lite-work` convoy before bumping the pin, as the reviewer split needs
+anyway.
 
 ### Three verdicts
 
@@ -500,9 +504,11 @@ as a starting point (D4).
 Verdicts the reviewer does not write:
 
 - A failed check counts as correct, so the next round sees the check output. The same check
-  failing in two consecutive rounds of one attempt counts as restart.
+  failing in two consecutive rounds of one attempt counts as restart. Verify records the failed
+  checks as `<records>.failed_checks` to compare them.
 - An executor that reported a blocker skips the tier's remaining rounds and attempts and
-  escalates, as today: the same model would stop in the same place.
+  escalates, as today: the same model would stop in the same place. It is recorded as a restart,
+  since the next tier starts from the card's base.
 
 A tier runs up to `attempts × rounds` executor sessions and at most as many reviews. Only
 attempts that pass every check reach a reviewer.
@@ -601,8 +607,12 @@ has. Drain every `superpowers-lite-work` convoy before bumping the pin.
 ### T3 gate and blocked items
 
 The human gate opens once, when a card first reaches T3, and not again for later T3 attempts or
-rounds. A blocked item mails `human` with its findings, as the "Per-item loop" diagram already
-says; today only the T3 gate mails.
+rounds. The bond carries it as a fourth var, `gate` (`yes` or `no`), and the approval step's
+condition is `{{gate}} == yes`: conditioning on `{{action}} == t3` would open it for every T3
+session. A blocked item mails `human` with the last finding and where every attempt's files are,
+as the "Per-item loop" diagram already said; before this only the T3 gate mailed. Checked with
+`gc formula show` on gc 1.5.1: `gate=yes` compiles the gate and approval, `gate=no` leaves them
+out, and the item's verify fanout passes all four vars.
 
 ### Logging
 

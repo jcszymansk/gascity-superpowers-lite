@@ -1,11 +1,13 @@
 description = """
 What follows a verified attempt, bonded by the verify step's on_complete with
-`action` set to t1, t2, t3 or land and `round` to the attempt's round:
+`action` set to t1, t2, t3 or land, `attempt` and `round` to the next
+attempt's number and round, and `gate` to yes when a human must approve it:
 
-  t1    the T1 retry, or the first attempt on the next card: attempt +
-        verify, which bonds this formula again
+  t1    a T1 round or attempt, or the first attempt on the next card:
+        attempt + verify, which bonds this formula again
   t2    attempt + verify, which bonds this formula again
-  t3    human gate, approval, attempt + verify, which bonds this formula again
+  t3    attempt + verify, which bonds this formula again; with gate = yes
+        (a card's first T3 attempt) a human gate and approval come first
   land  land + close the work bead
 
 Template fields use single-brace vars ({action}); conditions keep double
@@ -25,16 +27,24 @@ required = true
 description = "t1, t2, t3 or land."
 required = true
 
-[vars.round]
-description = "The attempt's round at its tier: 1 for a first attempt, 2 for a retry."
+[vars.attempt]
+description = "The attempt's number at its tier, from 1; each attempt starts from the card's base."
 default = "1"
+
+[vars.round]
+description = "The round within the attempt, from 1; each later round continues the previous one."
+default = "1"
+
+[vars.gate]
+description = "yes when a human approves the attempt first (a card's first T3 attempt), else no."
+default = "no"
 
 # Nothing watches human gates: verify mails `human`, who runs
 # `gc superpowers-lite approve <work bead>` to close this gate.
 [[template]]
 id = "{target}.approve"
 title = "Human approval of a T3 attempt for {issue}"
-condition = "{{action}} == t3"
+condition = "{{gate}} == yes"
 metadata = { "gc.run_target" = "superpowers-lite.operator", "lite.step" = "approval" }
 description_file = "../assets/workflows/superpowers-lite-work-item/approval.md"
 
@@ -46,7 +56,7 @@ id = "{target}.attempt"
 title = "{action} attempt for {issue}"
 condition = "{{action}} != land"
 needs = ["{target}.approve"]
-metadata = { "gc.run_target" = "superpowers-lite.executor-{action}", "lite.step" = "attempt", "lite.tier" = "{action}", "lite.round" = "{round}" }
+metadata = { "gc.run_target" = "superpowers-lite.executor-{action}", "lite.step" = "attempt", "lite.tier" = "{action}", "lite.attempt_number" = "{attempt}", "lite.round" = "{round}" }
 description_file = "../assets/workflows/superpowers-lite-work-item/attempt.md"
 
 [[template]]
@@ -54,13 +64,13 @@ id = "{target}.verify"
 title = "Verify the {action} attempt for {issue}"
 condition = "{{action}} != land"
 needs = ["{target}.attempt"]
-metadata = { "gc.run_target" = "superpowers-lite.card-reviewer", "lite.step" = "verify", "lite.tier" = "{action}", "lite.round" = "{round}" }
+metadata = { "gc.run_target" = "superpowers-lite.card-reviewer", "lite.step" = "verify", "lite.tier" = "{action}", "lite.attempt_number" = "{attempt}", "lite.round" = "{round}" }
 description_file = "../assets/workflows/superpowers-lite-work-item/verify.md"
 
 [template.on_complete]
 for_each = "output.next"
 bond = "superpowers-lite-next"
-vars = { action = "{item.action}", round = "{item.round}", issue = "{issue}" }
+vars = { action = "{item.action}", attempt = "{item.attempt}", round = "{item.round}", gate = "{item.gate}", issue = "{issue}" }
 sequential = true
 
 [[template]]

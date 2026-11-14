@@ -35,7 +35,7 @@ from litetools.context import (
     step_attempt,
 )
 from litetools.gc import Bead, Gc
-from litetools.ladder import Action, Attempt, Decision, Tier, Verdict, decide, highest, parse_attempt
+from litetools.ladder import Action, Attempt, Decision, Tier, TierLimits, Verdict, decide, highest, parse_attempt
 from litetools.result import Err, Ok, Result
 
 log = logging.getLogger(__name__)
@@ -644,7 +644,7 @@ MAX_SUBJECT_LENGTH = 72
 
 
 def _rejected_attempt(item: Item, ref: CardRef) -> Result[Attempt | None, str]:
-    """Return the card's last rejected attempt, or None before its first rejection."""
+    """Return the card's last attempt that was not approved, or None before the first."""
     key = item.anchor.meta(f"{ref.prefix}last_rejected")
     if not key:
         return Ok(None)
@@ -652,12 +652,19 @@ def _rejected_attempt(item: Item, ref: CardRef) -> Result[Attempt | None, str]:
     return parsed if isinstance(parsed, Err) else Ok(parsed.value)
 
 
+def _tier_limits(item: Item, tier: Tier) -> Result[TierLimits, str]:
+    """Return the attempts and rounds the item's recorded budget gives ``tier``."""
+    recorded = budget.recorded(item.anchor.metadata)
+    return recorded if isinstance(recorded, Err) else Ok(recorded.value.tier_limits(tier))
+
+
 def _start_commit(layout: CardLayout, attempt: Attempt, previous: Attempt | None, base: str) -> Result[str, str]:
-    """Return the commit an attempt starts from: the rejected attempt for a retry, else the card's base."""
+    """Return the commit a round starts from: the previous round's for a later round, else the card's base."""
     if attempt.round == 1:
         return Ok(base)
-    if previous is None or previous.tier is not attempt.tier or previous.round != attempt.round - 1:
-        return Err(f"retry {attempt.key} needs a rejected {attempt.tier.value} attempt before it, got {previous}")
+    expected = Attempt(attempt.tier, attempt.number, attempt.round - 1)
+    if previous != expected:
+        return Err(f"round {attempt.key} needs {expected.key} not approved before it, got {previous.key if previous else 'none'}")
     text = _read(layout.report(previous))
     if isinstance(text, Err):
         return text
@@ -668,10 +675,11 @@ def _start_commit(layout: CardLayout, attempt: Attempt, previous: Attempt | None
 
 
 def attempt_start(ctx: Ctx) -> Outcome:
-    """Prepare the worktree and print the card and the last rejection's findings.
+    """Prepare the worktree and print the card and what earlier sessions on it left.
 
-    A first attempt at a tier starts from the card's base; a retry starts from
-    the attempt it retries.
+    An attempt's first round starts from the card's base and sees the
+    findings and final diff of the attempt before it; a later round continues
+    from the previous round's commit and sees its findings.
     """
     found = _claimed_step(ctx, "attempt")
     if isinstance(found, Err):
@@ -688,6 +696,14 @@ def attempt_start(ctx: Ctx) -> Outcome:
     if isinstance(scope, Err):
         return scope
     ref, files = scope.value.ref, scope.value.files
+    limits = _tier_limits(item, attempt.tier)
+    if isinstance(limits, Err):
+        return limits
+    if not limits.value.allows(attempt):
+        return Err(
+            f"{attempt.key} is past the budget of {attempt.tier.value}: "
+            f"{limits.value.attempts} attempts of {limits.value.rounds} rounds"
+        )
     records = _attempt_records(ref, attempt)
     sessions = _session_records(ctx, item.anchor, records, Role.EXECUTOR)
     previous = _rejected_attempt(item, ref)
@@ -737,20 +753,25 @@ def attempt_start(ctx: Ctx) -> Outcome:
     if attempt.round > 1 and previous.value is not None:
         lines += [
             "",
-            f"This is a retry. Your {previous.value.key} attempt was rejected, and the worktree holds it",
-            f"(commit {start.value[:12]}). Read why: {files.findings(previous.value)}",
+            f"This is round {attempt.round} of the attempt. Round {previous.value.key} was not approved, and the",
+            f"worktree holds it (commit {start.value[:12]}). Read why: {files.findings(previous.value)}",
             "Fix what the findings name and keep what already works; do not start over.",
         ]
     elif previous.value is not None:
-        lines += [
-            "",
-            f"A {previous.value.key} attempt was rejected. The worktree is reset to {where}.",
-            f"Why it was rejected: {files.findings(previous.value)}",
-            f"Its diff, for reference only: {files.diff(previous.value)}",
-            "Do not reapply that diff blindly; fix what the findings name.",
-        ]
+        lines += ["", f"An earlier attempt, ending with {previous.value.key}, did not pass. The worktree is reset to {where}."]
+        lines += _earlier_attempt_lines(files, previous.value)
     lines += _attempt_finish_lines()
     return Ok(Done("\n".join(lines)))
+
+
+def _earlier_attempt_lines(files: CardLayout, previous: Attempt) -> list[str]:
+    """Point a fresh attempt at every round's findings of the attempt before it, and at its last diff."""
+    findings = [files.findings(r) for r in previous.earlier_rounds() if files.findings(r).exists()]
+    lines = ["Why its rounds were not approved, in order:", *(f"  {path}" for path in findings)]
+    if files.diff(previous).exists():
+        lines.append(f"Its last diff, for reference only: {files.diff(previous)}")
+    lines.append("Do not reapply that work blindly; fix what the findings name, or take another approach.")
+    return lines
 
 
 def _attempt_finish_lines() -> list[str]:
@@ -923,7 +944,7 @@ def _decision_metadata(
     ref = scope.ref
     approved = verdict is Verdict.APPROVE
     records = _attempt_records(ref, attempt)
-    values = {records: "approved" if approved else f"rejected: {why}", f"{records}.verified_at": _now()}
+    values = {records: "approved" if approved else f"{verdict.value}: {why}", f"{records}.verified_at": _now()}
     if not approved:
         values[f"{ref.prefix}last_rejected"] = attempt.key
     elif ref.is_last:
@@ -956,24 +977,42 @@ def _record_decision(
     recorded = ctx.gc.set_metadata(item.anchor.bead_id, values.value)
     if isinstance(recorded, Err):
         return recorded
-    if decision.action is Action.T3:
-        which = "" if scope.ref.total == 1 else f" on {scope.ref.label}"
-        body = (
+    which = "" if scope.ref.total == 1 else f" on {scope.ref.label}"
+    if decision.gate:
+        _mail_human(
+            ctx,
+            f"t3 approval needed: {item.anchor.bead_id}",
             f"{item.anchor.bead_id} ({item.anchor.title}) failed at t1 and t2{which}: {why}\n"
             f"Findings: {scope.files.findings(attempt)}\n"
             f"Approve a t3 attempt with: gc superpowers-lite approve --rig {ctx.env.rig} {item.anchor.bead_id}\n"
-            "Leave it to keep the item waiting."
+            "Leave it to keep the item waiting.",
         )
-        sent = ctx.gc.run("mail", "send", "human", "-s", f"t3 approval needed: {item.anchor.bead_id}", "-m", body)
-        if isinstance(sent, Err):
-            log.warning("could not mail human about the t3 gate: %s", sent.error)
+    elif decision.action is Action.BLOCKED:
+        _mail_human(
+            ctx,
+            f"blocked: {item.anchor.bead_id}",
+            f"{item.anchor.bead_id} ({item.anchor.title}) failed at every tier{which}, and the item has failed.\n"
+            f"Last finding ({attempt.key}): {why}\n"
+            f"Findings: {scope.files.findings(attempt)}\n"
+            f"Every attempt's findings, diff and report: {scope.files.root}",
+        )
     return Ok(None)
 
 
+def _mail_human(ctx: Ctx, subject: str, body: str) -> None:
+    """Mail ``human``; a mail that cannot be sent is logged, since the step's outcome is already recorded."""
+    sent = ctx.gc.run("mail", "send", "human", "-s", subject, "-m", body)
+    if isinstance(sent, Err):
+        log.warning("could not mail human (%s): %s", subject, sent.error)
+
+
 def _close_verify(
-    ctx: Ctx, item: Item, scope: CardScope, attempt: Attempt, verdict: Verdict, why: str, retryable: bool = True
+    ctx: Ctx, item: Item, scope: CardScope, attempt: Attempt, verdict: Verdict, why: str, blocked: bool = False
 ) -> Outcome:
-    decision = decide(attempt, verdict, retryable, scope.ref.is_last)
+    limits = _tier_limits(item, attempt.tier)
+    if isinstance(limits, Err):
+        return limits
+    decision = decide(attempt, verdict, blocked, scope.ref.is_last, limits.value)
     recorded = _record_decision(ctx, item, scope, attempt, verdict, decision, why)
     if isinstance(recorded, Err):
         return recorded
@@ -1004,7 +1043,7 @@ def _report_check(layout: CardLayout, attempt: Attempt, card_id: str) -> tuple[c
 
 
 def _findings_text(attempt: Attempt, results: list[checks.CheckResult], extra: str = "") -> str:
-    lines = [f"# Why the {attempt.key} attempt was rejected", ""]
+    lines = [f"# Why {attempt.key} was not approved", ""]
     for result in results:
         if not result.passed:
             lines.append(f"## {result.name}")
@@ -1224,9 +1263,18 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
         written = _write(layout.findings(attempt), _findings_text(attempt, results))
         if isinstance(written, Err):
             return written
-        why = "failed checks: " + ", ".join(r.name for r in failed)
-        retryable = report is None or report.status is not reports.Status.BLOCKED
-        return _close_verify(ctx, item, scope.value, attempt, Verdict.REJECT, why, retryable)
+        names = [r.name for r in failed]
+        recorded_failed = _record(ctx, item.anchor, {f"{records}.failed_checks": ",".join(names)})
+        if isinstance(recorded_failed, Err):
+            return recorded_failed
+        repeated = _repeated_checks(item.anchor, scope.value.ref, attempt, names)
+        why = "failed checks: " + ", ".join(names)
+        if repeated:
+            log.info("%s %s failed %s again; restarting the attempt", item.anchor.bead_id, attempt.key, ", ".join(repeated))
+            why += f" (again after the previous round: {', '.join(repeated)})"
+        # A blocker escalates from the card's base, so it is recorded as the restart it is.
+        choice = Verdict.RESTART if repeated or quick.value.blocked else Verdict.CORRECT
+        return _close_verify(ctx, item, scope.value, attempt, choice, why, blocked=quick.value.blocked)
     marked = ctx.gc.set_metadata(item.step.bead_id, {"lite.checks": "passed", "lite.checks_at": _now()})
     if isinstance(marked, Err):
         return marked
@@ -1251,12 +1299,30 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
                     *_outside_files_text(outside),
                     "Approve when the change does what the card asks and nothing else:",
                     "  gc superpowers-lite verdict approve",
-                    "Otherwise name each problem, with file and line:",
-                    '  gc superpowers-lite verdict reject --reason "<problems>"',
+                    "Ask for corrections when the change is close and a few fixes would finish it; name",
+                    "each problem, with file and line:",
+                    '  gc superpowers-lite verdict correct --reason "<problems>"',
+                    "Restart when fixing it would mean starting over: the approach contradicts the card,",
+                    "fixing it would discard most of the diff, the diff spreads into files the change",
+                    "does not need, or the findings repeat what an earlier round already named:",
+                    '  gc superpowers-lite verdict restart --reason "<why it cannot be fixed>"',
                 ]
             )
         )
     )
+
+
+def _repeated_checks(anchor: Bead, ref: CardRef, attempt: Attempt, failed: list[str]) -> list[str]:
+    """Return the checks that failed both this round and the previous round of the same attempt.
+
+    A check that another round did not fix will not be fixed by more rounds
+    of the same attempt, so its failure restarts the attempt instead.
+    """
+    if attempt.round == 1:
+        return []
+    previous = Attempt(attempt.tier, attempt.number, attempt.round - 1)
+    before = set(anchor.meta(f"{_attempt_records(ref, previous)}.failed_checks").split(","))
+    return [name for name in failed if name in before]
 
 
 def _record_done_when_time(
@@ -1306,8 +1372,8 @@ def _outside_files_text(outside: tuple[str, ...]) -> list[str]:
 
 def verdict(ctx: Ctx, choice: Verdict, reason: str | None) -> Outcome:
     """Record the reviewer's verdict on an attempt whose checks passed."""
-    if choice is Verdict.REJECT and not (reason or "").strip():
-        return Err("a rejection needs --reason naming each problem")
+    if choice is not Verdict.APPROVE and not (reason or "").strip():
+        return Err(f"{choice.value} needs --reason naming each problem")
     found = _claimed_step(ctx, "verify")
     if isinstance(found, Err):
         return found
@@ -1326,7 +1392,7 @@ def verdict(ctx: Ctx, choice: Verdict, reason: str | None) -> Outcome:
     review = _write(layout.attempt_dir(attempt) / "review.md", f"# {choice.value}\n\n{text}\n")
     if isinstance(review, Err):
         return review
-    if choice is Verdict.REJECT:
+    if choice is not Verdict.APPROVE:
         written = _write(layout.findings(attempt), _findings_text(attempt, [], text))
         if isinstance(written, Err):
             return written

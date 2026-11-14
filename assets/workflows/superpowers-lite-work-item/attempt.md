@@ -2,8 +2,10 @@ Do the task card. Run:
 
     gc superpowers-lite attempt-start
 
-It resets the worktree, then prints the card, the files it expects you to
-change and, after a rejected attempt, why it was rejected. The card is your
+It prepares the worktree, then prints the card, the files it expects you to
+change and, after earlier sessions on the card, why they were not approved: a
+later round of an attempt continues from the previous round's work, a new
+attempt starts again from the card's base. The card is your
 whole task: follow its Steps and Checklist, change the files it lists, and work
 only in the printed worktree. If the work truly needs another file (a caller of
 a renamed method, a fixture), change it and say in your summary which file and

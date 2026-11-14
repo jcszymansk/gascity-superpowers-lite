@@ -112,14 +112,17 @@ Each bead becomes one item, run by the pack's own agents, each step in a fresh s
    attempt whose report is missing, whose executor reported a blocker, or that leaves uncommitted
    changes, changes nothing, adds a skip marker or fails a `done_when` command. Files outside the
    card and removed tests are listed for the reviewer to judge.
-5. An approved attempt on a card with cards after it starts the next card at T1, from the
-   approved commit. An approved attempt on the last card lands. A rejected T1 attempt is retried once by `executor-t1`, starting
-   from the rejected attempt with its findings, because most T1 rejections need a small fix, not
-   a stronger model. An attempt whose executor reported a blocker skips the retry. A rejected
-   retry escalates: the worktree is reset to where the card started and `executor-t2` gets the card plus the
-   findings and diff of the failed attempt. A rejected T2
-   attempt mails `human` and waits for approval of a T3 attempt (see "Approving a T3 attempt").
-   A rejected T3 attempt fails the item.
+5. The reviewer approves, asks to correct, or restarts; failed checks count as correct, or as
+   restart when the same check also failed the previous round. An approved attempt on a card with
+   cards after it starts the next card at T1, from the approved commit; an approved attempt on the
+   last card lands. Correct runs the next round of the same attempt, from its commit and with its
+   findings, while the tier's budget has rounds left; restart, or correct in the last round, starts
+   the next attempt from where the card started, with every earlier round's findings and the last
+   diff as context. With no attempts left the card escalates to `executor-t2`, then, after a mail
+   to `human` and an approval, to `executor-t3` (see "Approving a T3 attempt"); a later T3 round or
+   attempt needs no second approval. An executor that reports a blocker escalates at once. When
+   T3's budget runs out the item fails and `human` gets a mail with the findings. Each tier's
+   budget is set below.
 6. `operator` lands every card's work on the item's target branch at once and closes the bead.
 
 The target branch is the bead's `target` metadata, else the convoy's, else `lite/<bead id>`. The
@@ -139,8 +142,9 @@ an item whose predecessor is not closed, or closed with a `lite.result` other th
 records `lite.result = skipped`. A predecessor a human closed without lite counts as done.
 
 The work bead records the outcome: `lite.cards` and the current `lite.card`, `lite.kind` (each
-card's kind once, comma-separated), one `lite.attempt.<attempt>` entry per attempt (`t1`, the
-retry `t1.2`, `t2`, `t3`; `approved` or the check or review finding that rejected it),
+card's kind once, comma-separated), one `lite.attempt.<attempt>` entry per attempt (`t1`, `t1.r2` for round 2,
+`t1.a2` for a second attempt, `t2.a2.r3`; `approved`, or `correct: ` or `restart: ` and the check
+or review finding), `lite.attempt.<attempt>.failed_checks` when checks failed it,
 `lite.last_rejected`, `lite.passed_tier`, `lite.card_overlap.<attempt>` (how many of the attempt's
 added lines of 12 or more characters appear verbatim in the card, such as `4/333`),
 `lite.files_touched.<attempt>`, per attempt the sessions and slots that executed and reviewed
@@ -154,6 +158,32 @@ or `pack`), and `lite.result` (`landed`, `blocked`, `uncuttable`,
 `lite.card.<n>.base_commit` for where card n starts), and its `lite.passed_tier` is the highest tier
 any card needed. Drafts, cards, reports, diffs and findings are kept under
 `$GC_CITY/.gc/artifacts/<rig>/superpowers-lite/<bead>/` (`drafts/<n>.md`, `cards/<n>/`).
+
+### Ladder budget
+
+Each tier gets a number of attempts (each starting from where the card starts) and of rounds per
+attempt (each continuing the previous round). The pack defaults are T1 1 attempt of 2 rounds, T2
+and T3 1 attempt of 1 round. Set any of them, as whole numbers from 1 to 10, highest precedence
+first:
+
+```sh
+gc sling <rig>/superpowers-lite.operator <convoy> --on superpowers-lite-work --var lite_t1_rounds=3
+```
+
+```toml
+# city.toml
+[[rigs]]
+name = "<rig>"
+formula_vars = { lite_t1_attempts = "3", lite_t1_rounds = "3" }
+
+[workspace]
+env = { LITE_T1_ATTEMPTS = "2", LITE_T2_ROUNDS = "2" }
+```
+
+The names are `lite_<tier>_<attempts|rounds>` as formula vars and `LITE_<TIER>_<ATTEMPTS|ROUNDS>`
+in the environment. `prepare-worktree` resolves the budget once per item and records it on the
+work bead, so a change reaches only items prepared after it; an invalid value fails the item.
+A tier runs at most attempts × rounds executor sessions and as many reviews.
 
 ### Approving a T3 attempt
 

@@ -232,7 +232,7 @@ class CardLayout:
         return self.attempt_dir(attempt) / "attempt.diff"
 
     def findings(self, attempt: Attempt) -> Path:
-        """Why ``attempt`` was rejected, for the next attempt."""
+        """Why ``attempt`` was not approved, for the sessions after it."""
         return self.attempt_dir(attempt) / "findings.md"
 
 
@@ -322,6 +322,9 @@ def resolve_item(gc: Gc, step: Bead) -> Result[Item, str]:
 
 
 def step_attempt(step: Bead) -> Result[Attempt, str]:
-    """Return the attempt an attempt or verify step serves, from ``lite.tier`` and ``lite.round``."""
-    found = attempt_of(step.meta("lite.tier"), step.meta("lite.round"))
+    """Return the attempt an attempt or verify step serves.
+
+    It is read from the step's ``lite.tier``, ``lite.attempt_number`` and ``lite.round``.
+    """
+    found = attempt_of(step.meta("lite.tier"), step.meta("lite.attempt_number"), step.meta("lite.round"))
     return Err(f"step {step.bead_id} has {found.error}") if isinstance(found, Err) else found

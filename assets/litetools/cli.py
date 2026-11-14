@@ -40,7 +40,7 @@ def _parser() -> argparse.ArgumentParser:
     finish.add_argument("--blocked", help="why the card cannot be done as written")
     decide = sub.add_parser("verdict")
     decide.add_argument("choice", choices=[v.value for v in Verdict])
-    decide.add_argument("--reason", help="the problems found; required to reject")
+    decide.add_argument("--reason", help="the problems found, or why the attempt cannot be fixed; required unless approving")
     approve = sub.add_parser("approve")
     approve.add_argument("--rig", help="the rig that holds the work bead (default: $GC_RIG, else the current directory's)")
     approve.add_argument("anchor", help="the work bead whose t3 attempt to approve")

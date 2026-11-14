@@ -6,7 +6,7 @@ import pytest
 
 from litetools import budget
 from litetools.budget import Kind, Limit, Setting, Source
-from litetools.ladder import Tier
+from litetools.ladder import Tier, TierLimits
 from litetools.result import Err, Ok
 
 T1_ROUNDS = Setting(Tier.T1, Kind.ROUNDS)
@@ -118,3 +118,9 @@ def test_recorded_refuses_a_missing_or_invalid_record(key: str, value: str | Non
 def test_summary_names_every_tier_with_its_sources() -> None:
     summary = resolved({"lite_t1_rounds": "3"}, {"LITE_T2_ATTEMPTS": "2"}).summary()
     assert summary == "t1 1x3 (pack, var), t2 2x1 (env, pack), t3 1x1 (pack, pack)"
+
+
+def test_tier_limits_give_the_ladder_each_tiers_attempts_and_rounds() -> None:
+    result = resolved({"lite_t2_attempts": "3", "lite_t2_rounds": "4"}, {})
+    assert result.tier_limits(Tier.T2) == TierLimits(3, 4)
+    assert result.tier_limits(Tier.T1) == TierLimits(1, 2)

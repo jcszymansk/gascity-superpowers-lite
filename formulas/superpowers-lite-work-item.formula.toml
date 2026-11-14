@@ -32,7 +32,8 @@ metadata = { "gc.run_target" = "superpowers-lite.executor-t1", "lite.step" = "at
 description_file = "../assets/workflows/superpowers-lite-work-item/attempt.md"
 
 # The verdict, not a model, decides what follows: verify writes
-# gc.output_json = {"next": [{"action": "land" | "t1" | "t2" | "t3"}]} and this bonds one
+# gc.output_json = {"next": [{"action": "land" | "t1" | "t2" | "t3", "attempt", "round",
+# "gate"}]} and this bonds one
 # superpowers-lite-next fragment per entry. land lives in the fragment because
 # an authored step cannot need the generated verify-t1-fanout control.
 [[steps]]
@@ -45,7 +46,7 @@ description_file = "../assets/workflows/superpowers-lite-work-item/verify.md"
 [steps.on_complete]
 for_each = "output.next"
 bond = "superpowers-lite-next"
-vars = { action = "{item.action}", round = "{item.round}", issue = "{{issue}}" }
+vars = { action = "{item.action}", attempt = "{item.attempt}", round = "{item.round}", gate = "{item.gate}", issue = "{{issue}}" }
 sequential = true
 
 # Every step above is a member of this scope. A member that closes failed (a
