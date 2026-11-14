@@ -40,7 +40,7 @@ description_file = "../assets/workflows/superpowers-lite-work-item/attempt.md"
 id = "verify-t1"
 title = "Verify the T1 attempt for {{issue}}"
 needs = ["attempt-t1"]
-metadata = { "gc.run_target" = "superpowers-lite.card-reviewer", "lite.step" = "verify", "lite.tier" = "t1", "gc.scope_ref" = "item", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope" }
+metadata = { "gc.run_target" = "superpowers-lite.card-reviewer-t1", "lite.step" = "verify", "lite.tier" = "t1", "gc.scope_ref" = "item", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope" }
 description_file = "../assets/workflows/superpowers-lite-work-item/verify.md"
 
 [steps.on_complete]

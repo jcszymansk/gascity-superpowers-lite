@@ -108,7 +108,8 @@ Each bead becomes one item, run by the pack's own agents, each step in a fresh s
    solutions on disk.
 3. `executor-t1` does the first card in the worktree. The pack command it finishes with commits the work,
    with a `Bead: <id>` trailer.
-4. `card-reviewer` runs the checks, then reviews the diff against the card. The checks fail an
+4. The card reviewer of the attempt's tier (`card-reviewer-t1`, `-t2` or `-t3`) runs the checks,
+   then reviews the diff against the card. The checks fail an
    attempt whose report is missing, whose executor reported a blocker, or that leaves uncommitted
    changes, changes nothing, adds a skip marker or fails a `done_when` command. Files outside the
    card and removed tests are listed for the reviewer to judge.
@@ -205,9 +206,12 @@ another model or harness by redefining its slot under the same name in `city.tom
 |---|---|---|
 | `operator` | `lite-ops` | as `lite-t1` |
 | `card-cutter` | `lite-plan` | as `lite-t3` |
-| `executor-t1`, `card-reviewer` | `lite-t1` | `claude-haiku-5-5`, effort medium |
+| `executor-t1` | `lite-t1` | `claude-haiku-5-5`, effort medium |
 | `executor-t2` | `lite-t2` | `claude-sonnet-5`, effort high |
 | `executor-t3` | `lite-t3` | `claude-opus-5-5`, effort high |
+| `card-reviewer-t1` | `lite-card-review-t1` | as `lite-t2` |
+| `card-reviewer-t2` | `lite-card-review-t2` | as `lite-t2` |
+| `card-reviewer-t3` | `lite-card-review-t3` | as `lite-t3` |
 
 ```toml
 [providers.lite-t1]
@@ -215,7 +219,11 @@ base = "builtin:pi"
 option_defaults = { model = "opencode-go/deepseek-v4.1-flash" }
 ```
 
-`lite-review` and `lite-review-cross` are declared for later phases. A city-scope import puts the
+The reviewer is the only gate between a cheap executor and the target branch, so T1 work is
+reviewed one model up by default. A review reads the card, the diff and the report and runs no
+exploration or build of its own, so it costs far less than an attempt on the same model. To have
+Haiku review Haiku, point `lite-card-review-t1` back at `lite-t1`. `lite-review` and
+`lite-review-cross` are declared for later phases. A city-scope import puts the
 agents in every rig; rigs need no import of their own.
 
 ### Pack commands

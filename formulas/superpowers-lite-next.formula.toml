@@ -64,7 +64,7 @@ id = "{target}.verify"
 title = "Verify the {action} attempt for {issue}"
 condition = "{{action}} != land"
 needs = ["{target}.attempt"]
-metadata = { "gc.run_target" = "superpowers-lite.card-reviewer", "lite.step" = "verify", "lite.tier" = "{action}", "lite.attempt_number" = "{attempt}", "lite.round" = "{round}" }
+metadata = { "gc.run_target" = "superpowers-lite.card-reviewer-{action}", "lite.step" = "verify", "lite.tier" = "{action}", "lite.attempt_number" = "{attempt}", "lite.round" = "{round}" }
 description_file = "../assets/workflows/superpowers-lite-work-item/verify.md"
 
 [template.on_complete]

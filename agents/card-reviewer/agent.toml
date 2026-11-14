@@ -1,3 +1,0 @@
-description = "Lite card reviewer: runs an attempt's checks, then reviews the diff against its card"
-scope = "rig"
-provider = "lite-t1"

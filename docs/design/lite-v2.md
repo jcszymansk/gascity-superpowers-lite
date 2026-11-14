@@ -162,7 +162,7 @@ that builds launch commands with gc's own `ResolveProvider` and `BuildProviderLa
 | `executor-t1` | `lite-t1` | `superpowers.implementer` | 1 |
 | `executor-t2` | `lite-t2` | | 1 |
 | `executor-t3` | `lite-t3` | | 1 |
-| `card-reviewer` | `lite-t1` | `superpowers.code-quality-reviewer` for the per-task review | 1 |
+| `card-reviewer-t1`, `-t2`, `-t3` | `lite-card-review-t1`, `-t2`, `-t3` | `superpowers.code-quality-reviewer` for the per-task review; one `card-reviewer` on `lite-t1` until 2026-11-14 | 1 |
 | `spec-author` | `lite-plan` | `superpowers.brainstorming` | 2 |
 | `plan-author` | `lite-plan` | `superpowers.writing-plans` | 2 |
 | `plan-reviewer` | `lite-plan` | `superpowers.plan-reviewer` | 2 |
@@ -445,8 +445,8 @@ in a file keyed by session, so later commands need no bead id. Every `bd` call p
 
 ## Ladder budgets, verdicts and reviewers
 
-Status: proposed 2026-11-14. Logging, the budget and the three verdicts are built (2026-11-14);
-the per-tier reviewers are not. The ladder below replaces the fixed one described in "Per-item
+Status: proposed and built 2026-11-14: logging, the budget, the three verdicts and the per-tier
+reviewers. The ladder below replaces the fixed one described in "Per-item
 loop".
 
 Three things about the current ladder are fixed that should not be:
@@ -602,7 +602,10 @@ A Sonnet review costs much less than a Sonnet attempt. The session reads the car
 report and the check summary; it does not explore the repository or run builds.
 
 Items in flight route their verify steps to `card-reviewer`, which the new version no longer
-has. Drain every `superpowers-lite-work` convoy before bumping the pin.
+has. Drain every `superpowers-lite-work` convoy before bumping the pin. A city that patches
+`superpowers-lite.card-reviewer` (gcexp sets the Android SDK environment for it in four rigs)
+must patch the three new agents instead in the same change, since gc refuses to load a patch
+that names no agent.
 
 ### T3 gate and blocked items
 
@@ -764,7 +767,7 @@ human and passed at T3; one approved at T1, landed and closed.
 |---|---|---|
 | 11 | Do pack commands get their arguments? | Yes, verbatim, including quoted multi-word values; gc imposes no timeout. |
 | 12 | Are scope=rig agents of a city-scope import created in each rig? | Yes. Rigs need no import of their own. |
-| 13 | What does the T3 gate look like? | A bead of type `gate` with `gc.root_bead_id` set to the item root, which `needs` it. It inherits the bonding step's route (`card-reviewer`), but `bd ready` leaves gates out, so no agent can claim it, and it starts no session. `approve` closes it. |
+| 13 | What does the T3 gate look like? | A bead of type `gate` with `gc.root_bead_id` set to the item root, which `needs` it. It inherits the bonding step's route (the card reviewer then), but `bd ready` leaves gates out, so no agent can claim it, and it starts no session. `approve` closes it. |
 | 14 | Beads per item, measured | 8 under the item root when T1 passes, 16 for T1, T2 and T3. |
 | 15 | Does a step run when the step it needs failed? | Yes: `close-anchor` ran after a refused `land`. It checks the landed commit itself and fails safely. |
 | 16 | Can a lab process pose as a session? | Only with a live session's identity: the controller SIGTERMs processes whose `GC_SESSION_ID` names no session it knows (`cmd/gc/session_beads.go`), and `gc hook` without one reports `drain`. |

@@ -1,0 +1,3 @@
+description = "Lite T2 card reviewer: runs the checks on a T2 attempt, then reviews its diff against the card"
+scope = "rig"
+provider = "lite-card-review-t2"

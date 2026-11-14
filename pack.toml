@@ -40,3 +40,17 @@ base = "provider:lite-t3"
 # Operator chores, selectors and gates.
 [providers.lite-ops]
 base = "provider:lite-t1"
+
+# Card review, one slot per tier the attempt ran on. The reviewer is the only
+# gate between a cheap executor and the target branch, so T1 and T2 work is
+# reviewed one model up from T1, and T3 work by T3. A review reads the card,
+# the diff and the report; it neither explores nor builds, so it costs far less
+# than an attempt on the same model.
+[providers.lite-card-review-t1]
+base = "provider:lite-t2"
+
+[providers.lite-card-review-t2]
+base = "provider:lite-t2"
+
+[providers.lite-card-review-t3]
+base = "provider:lite-t3"

@@ -11,8 +11,12 @@ from litetools import budget
 
 PACK = Path(__file__).resolve().parents[2]
 V2_FORMULAS = ("superpowers-lite-work", "superpowers-lite-work-item", "superpowers-lite-next")
-AGENTS = ("operator", "card-cutter", "executor-t1", "executor-t2", "executor-t3", "card-reviewer")
-SLOTS = ("lite-t1", "lite-t2", "lite-t3", "lite-plan", "lite-review", "lite-review-cross", "lite-ops")
+TIERS = ("t1", "t2", "t3")
+AGENTS = ("operator", "card-cutter", *(f"executor-{t}" for t in TIERS), *(f"card-reviewer-{t}" for t in TIERS))
+SLOTS = (
+    "lite-t1", "lite-t2", "lite-t3", "lite-plan", "lite-review", "lite-review-cross", "lite-ops",
+    *(f"lite-card-review-{t}" for t in TIERS),
+)
 STEP_COMMANDS = {
     "prepare-worktree": {"prepare-worktree"},
     "cut-card": {"cut-card-start", "cut-card-finish"},
@@ -48,9 +52,26 @@ def _commands() -> set[str]:
 def test_every_step_routes_to_a_lite_agent(name: str) -> None:
     for step in _steps(name):
         target = step["metadata"]["gc.run_target"]
-        agent = target.removeprefix("superpowers-lite.").replace("{action}", "t1")
         assert target.startswith("superpowers-lite."), step["id"]
-        assert agent in AGENTS, step["id"]
+        for tier in TIERS:
+            assert target.removeprefix("superpowers-lite.").replace("{action}", tier) in AGENTS, step["id"]
+
+
+def test_attempts_and_verifies_route_to_the_agent_of_their_tier() -> None:
+    for name in V2_FORMULAS[1:]:
+        for step in _steps(name):
+            meta = step["metadata"]
+            role = {"attempt": "executor", "verify": "card-reviewer"}.get(meta["lite.step"])
+            if role:
+                assert meta["gc.run_target"] == f"superpowers-lite.{role}-{meta['lite.tier']}", step["id"]
+
+
+def test_card_review_slots_sit_one_model_up_from_t1_and_on_t3_for_t3() -> None:
+    providers = _toml(PACK / "pack.toml")["providers"]
+    bases = {t: providers[f"lite-card-review-{t}"]["base"] for t in TIERS}
+    assert bases == {"t1": "provider:lite-t2", "t2": "provider:lite-t2", "t3": "provider:lite-t3"}
+    for tier in TIERS:
+        assert _toml(PACK / "agents" / f"card-reviewer-{tier}" / "agent.toml")["provider"] == f"lite-card-review-{tier}"
 
 
 @pytest.mark.parametrize("name", V2_FORMULAS[1:])

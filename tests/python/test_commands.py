@@ -423,7 +423,7 @@ def test_claim_refuses_a_bead_routed_elsewhere(world: World) -> None:
     state = world.state
     state["beads"]["s-x"]["metadata"]["gc.routed_to"] = "other.agent"
     world.save(state)
-    result = world.run("claim", env={"GC_TEMPLATE": "st/superpowers-lite.card-reviewer"})
+    result = world.run("claim", env={"GC_TEMPLATE": "st/superpowers-lite.card-reviewer-t1"})
     assert result.returncode == 1 and "routed to other.agent" in result.stderr
 
 
