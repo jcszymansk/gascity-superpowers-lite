@@ -544,8 +544,22 @@ gc 1.5.1 offers nothing simpler. From its source (`4f698fe`, the same tree as "R
 Rejected: rig-level env needs a patch on every agent that reads it, and a lite-owned file
 (`<city>/lite.toml`) would be a second config format outside gc's.
 
+Confirmed on 2026-11-14 in a throwaway city (gc 1.5.1, `GC_HOME` plus `GC_ISOLATED=1`, its own
+supervisor) with a probe pack: an entry formula draining a one-step item formula, a rig-scoped
+agent whose provider only sleeps, and a pack command that prints its environment.
+
+- With the rig's `formula_vars = { lite_t1_rounds = "3", lite_t2_attempts = "2" }`, a plain
+  `gc sling` stamped both on the workflow root and on the drain's item root, in
+  `gc.graphv2_vars.v1` and as `gc.var.*`. `--var lite_t1_rounds=5` on a second sling won over
+  the rig's 3 at both levels.
+- `lite_t2_attempts` reached the item root although neither formula declares it, so declaring
+  the vars only documents them.
+- `[workspace] env = { LITE_T1_ROUNDS = "4", ... }` was in the agent session's process
+  environment. The pack command, run with that environment, printed it along with
+  `GC_PACK_DIR`, `GC_RIG` and `GC_PROVIDER`; `GC_MODEL` was unset.
+
 `superpowers-lite-work` declares the six vars with empty defaults, so `gc formula show` lists
-them; empty means unset. The `lite_` prefix keeps them apart from other formulas' vars, since a
+them (it showed `(rig default="3")` in the probe); empty means unset. The `lite_` prefix keeps them apart from other formulas' vars, since a
 rig's `formula_vars` reach every formula slung in that rig.
 
 The budget is resolved once per item. `prepare-worktree` reads the item root's vars and its own
@@ -615,9 +629,8 @@ In this order, each step tested and committed on its own:
 3. Attempt keys, the three verdicts and `decide()` reading the recorded budget; the blocked mail.
 4. The per-tier reviewer agents and slots.
 
-Before step 2 ships, a scratch city confirms that a rig's `formula_vars` reach a drain item root
-through `gc sling` of `superpowers-lite-work`, and that `[workspace] env` reaches a pack command
-run from an agent session. Both are read from source, not yet run.
+Both config paths were confirmed in a throwaway city (see "Configuring the budget"). The probe
+used its own formulas, not `superpowers-lite-work`, whose drain has the same shape.
 
 ### Open items
 
