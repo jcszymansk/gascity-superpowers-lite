@@ -1,7 +1,8 @@
 # superpowers-lite v2: tiered delegation
 
-Status: phase 1 closed 2026-11-07, phase 2 not started. Proposed 2026-11-06 against superpowers-lite
-at `23a64c6`, superpowers at `390cac1a`, gc 1.5.1.
+Status: phase 1 closed 2026-11-07, phase 2 not started. Ladder budgets, verdicts and per-tier
+reviewers proposed 2026-11-14 (see "Ladder budgets, verdicts and reviewers"). Proposed
+2026-11-06 against superpowers-lite at `23a64c6`, superpowers at `390cac1a`, gc 1.5.1.
 
 ## Goal
 
@@ -441,6 +442,191 @@ it. Phase 1 commands: `claim`, `prepare-worktree`, `cut-card-start`, `cut-card-f
 `close-anchor`. `claim` wraps `gc hook --claim --drain-ack --json` and remembers the claimed step
 in a file keyed by session, so later commands need no bead id. Every `bd` call passes
 `--rig $GC_RIG`, because a worktree outside the rig would make gc pick the wrong store.
+
+## Ladder budgets, verdicts and reviewers
+
+Status: proposed 2026-11-14, not built. Once built, it replaces the fixed ladder described in
+"Per-item loop".
+
+Three things about the current ladder are fixed that should not be:
+
+- **The reviewer cannot choose how to retry.** A rejection at T1 round 1 continues from the
+  rejected attempt; any other rejection resets the worktree and moves up a tier. The ladder's
+  position decides, not the reviewer, who has read the diff and knows whether it is close or
+  went the wrong way.
+- **The budget is a constant.** `ladder.py` allows one T1 retry (`RETRIES = {Tier.T1: 1}`) and
+  nothing else. Haiku costs about 1/20 of Sonnet and 1/40 of Opus, and a city on free or
+  near-free T1 models can afford many more cheap attempts before paying for T2.
+- **The reviewer runs on `lite-t1`, the executor's slot.** It is the only gate between a cheap
+  executor and the target branch. The one trial (see "Open questions") had Haiku reject 6 of 6
+  bad diffs, but those diffs were far from their card; a subtle bug in a diff that follows the
+  card is untested.
+
+### Attempts and rounds
+
+- An **attempt** starts from the card's base commit with a reset worktree.
+- A **round** is one executor session within an attempt. Round 1 starts the attempt; each later
+  round continues from the previous round's commit and fixes what its findings name.
+
+Each tier has a budget of `attempts` × `rounds`. Attempt keys name both, leaving out a part
+equal to 1: `t1`, `t1.r2`, `t1.a2`, `t1.a2.r3`. `parse_attempt` keeps reading the old `t1.2` as
+`t1.r2`, so items that started before the change finish on their recorded keys.
+
+### Three verdicts
+
+The reviewer records one of:
+
+    gc superpowers-lite verdict approve
+    gc superpowers-lite verdict correct --reason "<each problem, with file and line>"
+    gc superpowers-lite verdict restart --reason "<why the attempt cannot be fixed>"
+
+`reject` goes away. What follows a verdict:
+
+| Verdict | Condition | Next |
+|---|---|---|
+| approve | cards left | T1 attempt 1 on the next card |
+| approve | last card | land |
+| correct | rounds left in this attempt | next round |
+| correct | last round of the attempt | as restart |
+| restart | attempts left at this tier | next attempt, round 1 |
+| restart | last attempt at this tier | T2; T3 after the human gate; blocked after T3 |
+
+The reviewer's prompt gives restart concrete grounds: the approach contradicts the card, fixing
+it would discard most of the diff, the diff spreads into files the change does not need, or the
+findings repeat what an earlier round of the same attempt already named. A fresh attempt or
+tier receives the previous attempt's final diff and the findings of every round as context, not
+as a starting point (D4).
+
+Verdicts the reviewer does not write:
+
+- A failed check counts as correct, so the next round sees the check output. The same check
+  failing in two consecutive rounds of one attempt counts as restart.
+- An executor that reported a blocker skips the tier's remaining rounds and attempts and
+  escalates, as today: the same model would stop in the same place.
+
+A tier runs up to `attempts × rounds` executor sessions and at most as many reviews. Only
+attempts that pass every check reach a reviewer.
+
+### Configuring the budget
+
+Six settings, with pack defaults that reproduce today's ladder:
+
+| Setting | Formula var | City env | Pack default |
+|---|---|---|---|
+| T1 attempts | `lite_t1_attempts` | `LITE_T1_ATTEMPTS` | 1 |
+| T1 rounds | `lite_t1_rounds` | `LITE_T1_ROUNDS` | 2 |
+| T2 attempts | `lite_t2_attempts` | `LITE_T2_ATTEMPTS` | 1 |
+| T2 rounds | `lite_t2_rounds` | `LITE_T2_ROUNDS` | 1 |
+| T3 attempts | `lite_t3_attempts` | `LITE_T3_ATTEMPTS` | 1 |
+| T3 rounds | `lite_t3_rounds` | `LITE_T3_ROUNDS` | 1 |
+
+Sources, highest precedence first:
+
+1. `--var lite_t1_rounds=3` on `gc sling`, for one convoy.
+2. The rig's `formula_vars` in `city.toml`, under its `[[rigs]]` entry or a rig patch.
+3. The city's `[workspace] env`, for example `env = { LITE_T1_ROUNDS = "3" }`.
+4. The pack default.
+
+gc 1.5.1 offers nothing simpler. From its source (`4f698fe`, the same tree as "References"):
+
+- `city.toml` rejects unknown keys (`internal/config/undecoded.go`, `classifyUndecoded`), so lite
+  cannot add a `[lite]` table.
+- `formula_vars` exist only per rig (`Rig.FormulaVars`, `RigPatch.FormulaVars`). `gc sling` merges
+  the target rig's into the workflow vars and lets `--var` win (`internal/sling/sling.go`,
+  `mergeRigFormulaVars`). There is no city-level equivalent.
+- A drain copies the parent workflow's vars to every item root and stamps them there as
+  `gc.graphv2_vars.v1` (`internal/dispatch/drain.go`, `ensureDrainItemRoot`), so each item sees
+  the convoy's vars.
+- `[workspace] env` reaches every managed session and loses to provider, agent and patch env.
+  Pack commands run in the calling agent's environment, which is how `LITE_VERIFY_WAIT_SECONDS`
+  already reaches `verify`.
+
+Rejected: rig-level env needs a patch on every agent that reads it, and a lite-owned file
+(`<city>/lite.toml`) would be a second config format outside gc's.
+
+`superpowers-lite-work` declares the six vars with empty defaults, so `gc formula show` lists
+them; empty means unset. The `lite_` prefix keeps them apart from other formulas' vars, since a
+rig's `formula_vars` reach every formula slung in that rig.
+
+The budget is resolved once per item. `prepare-worktree` reads the item root's vars and its own
+environment, validates every value and records it on the anchor with its source:
+`lite.budget.t1.rounds = 3`, `lite.budget.t1.rounds.source = rig`. `verify` reads only the anchor,
+so a config edit during a run does not change the ladder of an item already running, and every
+item shows the budget it ran with. A value that is not a whole number from 1 to 10 fails
+`prepare-worktree` with the setting and its source named; there is no silent fallback to the
+default. The cap catches typos such as `30` for `3`.
+
+### A reviewer per tier
+
+`card-reviewer` splits into `card-reviewer-t1`, `card-reviewer-t2` and `card-reviewer-t3`, on
+three new slots:
+
+```toml
+[providers.lite-card-review-t1]
+base = "provider:lite-t2"
+[providers.lite-card-review-t2]
+base = "provider:lite-t2"
+[providers.lite-card-review-t3]
+base = "provider:lite-t3"
+```
+
+The verify template routes by tier, `gc.run_target = "superpowers-lite.card-reviewer-{action}"`,
+as attempts already do, and the item formula's `verify-t1` routes to `card-reviewer-t1`. A city
+that wants Haiku reviewing Haiku points `lite-card-review-t1` back at `lite-t1`; a single rig
+patches the agent, as in "Behaviour verified on gc 1.5.1".
+
+A Sonnet review costs much less than a Sonnet attempt. The session reads the card, the diff, the
+report and the check summary; it does not explore the repository or run builds.
+
+Items in flight route their verify steps to `card-reviewer`, which the new version no longer
+has. Drain every `superpowers-lite-work` convoy before bumping the pin.
+
+### T3 gate and blocked items
+
+The human gate opens once, when a card first reaches T3, and not again for later T3 attempts or
+rounds. A blocked item mails `human` with its findings, as the "Per-item loop" diagram already
+says; today only the T3 gate mails.
+
+### Logging
+
+The anchor already records each attempt's verdict and reason (`lite.attempt.<key>`), the last
+rejected attempt, the tier each card passed at, the kind and the card count. Profiling budgets
+needs more, recorded under `<prefix>attempt.<key>.` by the commands that already run at each
+point:
+
+| Key | Recorded by | Value |
+|---|---|---|
+| `executor`, `executor_provider` | `attempt-start` | `GC_SESSION_NAME`, `GC_PROVIDER` |
+| `started_at`, `finished_at` | `attempt-start`, `attempt-finish` | UTC timestamps |
+| `reviewer`, `reviewer_provider` | first `verify` | `GC_SESSION_NAME`, `GC_PROVIDER` |
+| `done_when_seconds` | `verify` | runner wall time |
+| `review_started_at`, `review_finished_at` | `verify`, `verdict` | UTC timestamps |
+| `verdict` | `verify`, `verdict` | `approve`, `correct`, `restart` or `check-failed` |
+
+Token counts stay with calibration (see "Calibration and metrics"), which finds each session's
+transcript by the recorded session name.
+
+### Building it
+
+In this order, each step tested and committed on its own:
+
+1. Logging. It changes no behaviour and starts collecting data at once.
+2. Budget resolution and recording in `prepare-worktree`, with the pack defaults.
+3. Attempt keys, the three verdicts and `decide()` reading the recorded budget; the blocked mail.
+4. The per-tier reviewer agents and slots.
+
+Before step 2 ships, a scratch city confirms that a rig's `formula_vars` reach a drain item root
+through `gc sling` of `superpowers-lite-work`, and that `[workspace] env` reaches a pack command
+run from an agent session. Both are read from source, not yet run.
+
+### Open items
+
+- **Model ids.** The tmux runtime sets `GC_PROVIDER` but not `GC_MODEL`
+  (`internal/runtime/tmux/adapter.go`), so the log names the slot, not the model. Resolving the
+  slot through the city config afterwards is wrong once the config changes; recording the model
+  at run time needs a way to ask gc for a provider's resolved model.
+- **The cap of 10.** It may be too low for a city on free models.
+- **lite-build** still runs v1's per-task review and gets none of this until phase 2.
 
 ## Calibration and metrics
 
