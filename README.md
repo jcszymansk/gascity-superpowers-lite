@@ -142,7 +142,10 @@ card's kind once, comma-separated), one `lite.attempt.<attempt>` entry per attem
 retry `t1.2`, `t2`, `t3`; `approved` or the check or review finding that rejected it),
 `lite.last_rejected`, `lite.passed_tier`, `lite.card_overlap.<attempt>` (how many of the attempt's
 added lines of 12 or more characters appear verbatim in the card, such as `4/333`),
-`lite.files_touched.<attempt>`, and `lite.result` (`landed`, `blocked`, `uncuttable`,
+`lite.files_touched.<attempt>`, per attempt the sessions and slots that executed and reviewed
+it with their times (`lite.attempt.<attempt>.executor_sessions`, `.executor_provider`,
+`.started_at`, `.finished_at`, `.reviewer_sessions`, `.reviewer_provider`, `.review_started_at`,
+`.done_when_seconds`, `.verified_at`), and `lite.result` (`landed`, `blocked`, `uncuttable`,
 `land-refused` or `skipped`). An item of several cards keeps the per-card entries under
 `lite.card.<n>.` instead (`lite.card.2.attempt.t1`, `lite.card.2.passed_tier`, and
 `lite.card.<n>.base_commit` for where card n starts), and its `lite.passed_tier` is the highest tier

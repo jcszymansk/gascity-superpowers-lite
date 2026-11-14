@@ -43,6 +43,8 @@ class Env:
         identities: Every name the claim hook may record as our assignee.
         route: ``GC_TEMPLATE``, the route our claims must carry, or empty.
         pack_dir: ``GC_PACK_DIR``.
+        provider: ``GC_PROVIDER``, the slot the session runs on, or empty
+            when gc did not set it.
         verify_wait_seconds: How long one ``verify`` waits for ``done_when``
             (``LITE_VERIFY_WAIT_SECONDS``, default 100).
     """
@@ -54,6 +56,7 @@ class Env:
     identities: frozenset[str]
     route: str
     pack_dir: Path
+    provider: str = ""
     verify_wait_seconds: float = DEFAULT_VERIFY_WAIT_SECONDS
 
 
@@ -89,6 +92,7 @@ def load_env(environ: Mapping[str, str]) -> Result[Env, str]:
             identities=identities,
             route=environ.get("GC_TEMPLATE", "").strip(),
             pack_dir=Path(environ["GC_PACK_DIR"]),
+            provider=environ.get("GC_PROVIDER", "").strip(),
             verify_wait_seconds=verify_wait,
         )
     )

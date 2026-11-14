@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from litetools.context import CardRef, Layout, card_ref
+from litetools.context import CardRef, Layout, card_ref, load_env
 from litetools.gc import Bead
 from litetools.result import Err, Ok
 
@@ -55,3 +55,16 @@ def test_layout_puts_numbered_cards_apart_and_a_legacy_card_at_the_root() -> Non
     assert layout.card(CardRef(2, 3, False)).card == Path("/a/st-1/cards/2/card.md")
     assert layout.card(CardRef(1, 1, True)).card == Path("/a/st-1/card.md")
     assert layout.card(CardRef(1, 1, True)).root == Path("/a/st-1")
+
+
+AGENT_ENV = {"GC_CITY": "/c", "GC_RIG": "st", "GC_RIG_ROOT": "/r", "GC_PACK_DIR": "/p", "GC_SESSION_ID": "s-1"}
+
+
+def test_load_env_reads_the_slot_the_session_runs_on() -> None:
+    env = load_env({**AGENT_ENV, "GC_PROVIDER": " lite-t1 "})
+    assert isinstance(env, Ok) and env.value.provider == "lite-t1"
+
+
+def test_load_env_leaves_the_slot_empty_when_gc_sets_none() -> None:
+    env = load_env(AGENT_ENV)
+    assert isinstance(env, Ok) and env.value.provider == ""

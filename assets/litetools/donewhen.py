@@ -150,6 +150,23 @@ def result(state: State, spec: Spec) -> checks.CheckResult | None:
     return None if finished is None else checks.card_done_from(finished, spec.timeout_seconds)
 
 
+def wall_seconds(state: State, spec: Spec) -> Result[float, str]:
+    """Return how long this finished run took, from its start to its result.
+
+    A runner that died and was started again counts from the last start, so
+    the time covers the run whose result the checks use.
+    """
+    run, finished = _load(state.run_file), _load(state.result_file)
+    if not spec.matches(run) or not spec.matches(finished) or not isinstance(run, dict) or not isinstance(finished, dict):
+        return Err(f"no finished checks run for {spec.head} in {state.root}")
+    started_at, finished_at = run.get("started_at"), finished.get("finished_at")
+    if not isinstance(started_at, (int, float)) or not isinstance(finished_at, (int, float)):
+        return Err(f"the checks run in {state.root} has no start or finish time")
+    if finished_at < started_at:
+        return Err(f"the checks run in {state.root} finished before it started")
+    return Ok(float(finished_at - started_at))
+
+
 def forget(state: State) -> None:
     """Drop the run's record and result, so the next request starts a new run."""
     for path in (state.result_file, state.run_file, state.pid_file):

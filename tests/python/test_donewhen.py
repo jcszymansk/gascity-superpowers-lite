@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from litetools import checks, donewhen
-from litetools.result import Ok
+from litetools.result import Err, Ok
 
 
 def spec(tmp_path: Path, commands: tuple[str, ...] = ("true",), head: str = "abc") -> donewhen.Spec:
@@ -161,3 +161,43 @@ def test_await_outcomes_keeps_each_commands_exit_and_output(tmp_path: Path) -> N
     first, second = waited.value
     assert (first.exit_code, first.output) == (0, "hello")
     assert (second.exit_code, second.output) == (2, "bad")
+
+
+def timed_run(st: donewhen.State, started_at: object, finished_at: object, head: str = "abc") -> None:
+    st.run_file.write_text(json.dumps({"head": head, "commands": ["true"], "started_at": started_at}))
+    st.result_file.write_text(
+        json.dumps({"head": head, "commands": ["true"], "outcomes": [ran("true", 0)], "finished_at": finished_at})
+    )
+
+
+def test_wall_seconds_spans_the_last_start_to_the_result(tmp_path: Path) -> None:
+    st = state(tmp_path)
+    timed_run(st, 1000.0, 1062.5)
+    assert donewhen.wall_seconds(st, spec(tmp_path)) == Ok(62.5)
+
+
+def test_wall_seconds_of_a_real_run(tmp_path: Path) -> None:
+    st = state(tmp_path)
+    run_spec = spec(tmp_path, commands=("sleep 1",))
+    waited = donewhen.await_result(st, run_spec, 30)
+    assert isinstance(waited, Ok) and waited.value is not None
+    seconds = donewhen.wall_seconds(st, run_spec)
+    assert isinstance(seconds, Ok) and 1 <= seconds.value < 30
+
+
+@pytest.mark.parametrize(
+    ("started_at", "finished_at"), [(None, 10.0), (10.0, None), ("10", 20.0), (20.0, 10.0)]
+)
+def test_wall_seconds_refuses_missing_or_inverted_times(tmp_path: Path, started_at: object, finished_at: object) -> None:
+    st = state(tmp_path)
+    timed_run(st, started_at, finished_at)
+    assert isinstance(donewhen.wall_seconds(st, spec(tmp_path)), Err)
+
+
+def test_wall_seconds_needs_a_finished_run_of_the_same_commit(tmp_path: Path) -> None:
+    st = state(tmp_path)
+    assert isinstance(donewhen.wall_seconds(st, spec(tmp_path)), Err)
+    timed_run(st, 1.0, 2.0)
+    assert isinstance(donewhen.wall_seconds(st, spec(tmp_path, head="other")), Err)
+    st.result_file.unlink()
+    assert isinstance(donewhen.wall_seconds(st, spec(tmp_path)), Err)

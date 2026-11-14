@@ -603,22 +603,27 @@ says; today only the T3 gate mails.
 
 ### Logging
 
-The anchor already records each attempt's verdict and reason (`lite.attempt.<key>`), the last
-rejected attempt, the tier each card passed at, the kind and the card count. Profiling budgets
-needs more, recorded under `<prefix>attempt.<key>.` by the commands that already run at each
-point:
+Built 2026-11-14. The anchor already recorded each attempt's verdict and reason
+(`lite.attempt.<key>`: `approved`, or `rejected: ` and the failed checks or review findings), the
+last rejected attempt, `card_overlap` and `files_touched` per attempt, the tier each card passed
+at, the kind and the card count. Profiling budgets needs more, recorded under
+`<prefix>attempt.<key>.` by the commands that already run at each point:
 
 | Key | Recorded by | Value |
 |---|---|---|
-| `executor`, `executor_provider` | `attempt-start` | `GC_SESSION_NAME`, `GC_PROVIDER` |
-| `started_at`, `finished_at` | `attempt-start`, `attempt-finish` | UTC timestamps |
-| `reviewer`, `reviewer_provider` | first `verify` | `GC_SESSION_NAME`, `GC_PROVIDER` |
-| `done_when_seconds` | `verify` | runner wall time |
-| `review_started_at`, `review_finished_at` | `verify`, `verdict` | UTC timestamps |
-| `verdict` | `verify`, `verdict` | `approve`, `correct`, `restart` or `check-failed` |
+| `executor_sessions`, `reviewer_sessions` | `attempt-start`, `verify` | every session that worked the role, comma-separated in order, so a restarted session shows as a second entry |
+| `executor_provider`, `reviewer_provider` | `attempt-start`, `verify` | `GC_PROVIDER`, the slot; absent when gc sets none |
+| `started_at`, `finished_at` | first `attempt-start`, `attempt-finish` | UTC timestamps |
+| `review_started_at` | first `verify` | UTC timestamp |
+| `done_when_seconds` | `verify` | the runner's wall time, from its last start to its result |
+| `verified_at` | `verify` on failed checks, `verdict` | UTC timestamp |
+
+The session is the one claims are stored under (`GC_SESSION_ID`, else `GC_SESSION_NAME`, else
+`GC_AGENT`). A `done_when` run whose times cannot be read loses only `done_when_seconds`, with a
+warning in the log; the ladder does not depend on it.
 
 Token counts stay with calibration (see "Calibration and metrics"), which finds each session's
-transcript by the recorded session name.
+transcript by the recorded session.
 
 ### Building it
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -1225,3 +1226,153 @@ def test_cut_card_start_clears_drafts_of_an_earlier_run_but_not_its_own(world: W
     finished = world.run("cut-card-finish")
     assert finished.returncode == 0, finished.stderr
     assert world.meta(ANCHOR)["lite.cards"] == "1"
+
+
+# --- profiling records ---------------------------------------------------------
+
+STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
+T1_SLOT = {"GC_PROVIDER": "lite-t1"}
+REVIEW_SLOT = {"GC_PROVIDER": "lite-card-review-t1"}
+
+
+def restarted_session(world: World, step: str, name: str) -> dict[str, str]:
+    """Put ``step`` back in the claim queue and claim it as session ``name``, as gc does after a restart."""
+    state = world.state
+    state["claim_queue"] = [step]
+    world.save(state)
+    env = {"GC_SESSION_ID": name, "BEADS_ACTOR": ME}
+    claimed = world.run("claim", env=env)
+    assert claimed.returncode == 0, claimed.stderr
+    return env
+
+
+def test_an_attempt_records_its_session_slot_and_times(world: World) -> None:
+    sealed(world)
+    started = world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1", env=T1_SLOT)
+    assert started.returncode == 0, started.stderr
+    meta = world.meta(ANCHOR)
+    assert meta["lite.attempt.t1.executor_sessions"] == ME
+    assert meta["lite.attempt.t1.executor_provider"] == "lite-t1"
+    assert STAMP.fullmatch(meta["lite.attempt.t1.started_at"])
+    assert "lite.attempt.t1.finished_at" not in meta
+    (world.worktree / "src" / "app.txt").write_text("fixed\n")
+    assert world.run("attempt-finish", "--summary", "fixed it", env=T1_SLOT).returncode == 0
+    meta = world.meta(ANCHOR)
+    assert STAMP.fullmatch(meta["lite.attempt.t1.finished_at"])
+    assert meta["lite.attempt.t1.finished_at"] >= meta["lite.attempt.t1.started_at"]
+
+
+def test_a_blocked_attempt_records_when_it_finished(world: World) -> None:
+    sealed(world)
+    world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
+    assert world.run("attempt-finish", "--blocked", "the file is generated").returncode == 0
+    assert STAMP.fullmatch(world.meta(ANCHOR)["lite.attempt.t1.finished_at"])
+
+
+def test_a_session_without_a_slot_records_no_provider(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "fixed\n")
+    assert verified(world, "t1").returncode == 0
+    meta = world.meta(ANCHOR)
+    assert meta["lite.attempt.t1.executor_sessions"] == ME
+    assert meta["lite.attempt.t1.reviewer_sessions"] == ME
+    assert not any(key.endswith("_provider") for key in meta)
+
+
+def test_a_restarted_executor_is_listed_and_keeps_the_start_time(world: World) -> None:
+    sealed(world)
+    assert world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1").returncode == 0
+    started_at = world.meta(ANCHOR)["lite.attempt.t1.started_at"]
+    env = restarted_session(world, "s-att-t1", "lite-session-2")
+    again = world.run("attempt-start", env={**env, **T1_SLOT})
+    assert again.returncode == 0, again.stderr
+    assert "already started" in again.stdout
+    meta = world.meta(ANCHOR)
+    assert meta["lite.attempt.t1.executor_sessions"] == f"{ME},lite-session-2"
+    assert meta["lite.attempt.t1.executor_provider"] == "lite-t1"
+    assert meta["lite.attempt.t1.started_at"] == started_at
+
+
+def test_a_session_that_runs_attempt_start_twice_is_listed_once(world: World) -> None:
+    sealed(world)
+    assert world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1").returncode == 0
+    assert world.run("attempt-start").returncode == 0
+    assert world.meta(ANCHOR)["lite.attempt.t1.executor_sessions"] == ME
+
+
+def test_a_review_records_its_session_slot_done_when_time_and_verdict_time(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "fixed\n")
+    result = world.claim_and_run("s-ver-t1", "verify", "verify", tier="t1", env=REVIEW_SLOT)
+    assert result.returncode == 0, result.stderr
+    meta = world.meta(ANCHOR)
+    assert meta["lite.attempt.t1.reviewer_sessions"] == ME
+    assert meta["lite.attempt.t1.reviewer_provider"] == "lite-card-review-t1"
+    assert STAMP.fullmatch(meta["lite.attempt.t1.review_started_at"])
+    assert meta["lite.attempt.t1.done_when_seconds"] == "0"
+    assert "lite.attempt.t1.verified_at" not in meta
+    assert world.run("verdict", "approve").returncode == 0
+    meta = world.meta(ANCHOR)
+    assert STAMP.fullmatch(meta["lite.attempt.t1.verified_at"])
+    assert meta["lite.attempt.t1.verified_at"] >= meta["lite.attempt.t1.review_started_at"]
+
+
+def test_a_slow_done_when_records_its_wall_time_and_the_first_review_start(world: World) -> None:
+    sealed(world, slow_card(world, ""))
+    attempted(world, "t1", "fixed\n")
+    first = world.claim_and_run("s-ver-t1", "verify", "verify", tier="t1", env=SHORT_WAIT)
+    assert "still running" in first.stdout
+    meta = world.meta(ANCHOR)
+    review_started_at = meta["lite.attempt.t1.review_started_at"]
+    assert "lite.attempt.t1.done_when_seconds" not in meta
+    env = restarted_session(world, "s-ver-t1", "lite-session-2")
+    second = world.run("verify", env=env)
+    assert second.returncode == 0, second.stderr
+    assert "Every check passed" in second.stdout
+    meta = world.meta(ANCHOR)
+    assert int(meta["lite.attempt.t1.done_when_seconds"]) >= 2
+    assert meta["lite.attempt.t1.review_started_at"] == review_started_at
+    assert meta["lite.attempt.t1.reviewer_sessions"] == f"{ME},lite-session-2"
+
+
+def test_failed_checks_record_the_verdict_time_without_a_review(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "broken\n")
+    assert verified(world, "t1").returncode == 0
+    meta = world.meta(ANCHOR)
+    assert meta["lite.attempt.t1"].startswith("rejected: failed checks")
+    assert STAMP.fullmatch(meta["lite.attempt.t1.verified_at"])
+
+
+def test_a_blocked_attempt_records_no_done_when_time(world: World) -> None:
+    sealed(world)
+    world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
+    assert world.run("attempt-finish", "--blocked", "the file is generated").returncode == 0
+    assert verified(world, "t1").returncode == 0
+    meta = world.meta(ANCHOR)
+    assert "lite.attempt.t1.done_when_seconds" not in meta
+    assert STAMP.fullmatch(meta["lite.attempt.t1.verified_at"])
+
+
+def test_a_retry_keeps_its_own_records(world: World) -> None:
+    sealed(world)
+    attempted(world, "t1", "broken\n")
+    assert verified(world, "t1").returncode == 0
+    attempted(world, "t1", "fixed\n", round_="2")
+    assert verified(world, "t1", round_="2").returncode == 0
+    meta = world.meta(ANCHOR)
+    for key in ("t1", "t1.2"):
+        assert STAMP.fullmatch(meta[f"lite.attempt.{key}.started_at"])
+        assert STAMP.fullmatch(meta[f"lite.attempt.{key}.finished_at"])
+        assert meta[f"lite.attempt.{key}.executor_sessions"] == ME
+    assert meta["lite.attempt.t1.2.done_when_seconds"] == "0"
+
+
+def test_a_split_item_records_each_card_under_its_number(world: World) -> None:
+    sealed_two(world)
+    pass_first_card(world)
+    meta = world.meta(ANCHOR)
+    for suffix in ("started_at", "finished_at", "review_started_at", "verified_at", "done_when_seconds"):
+        assert f"lite.card.1.attempt.t1.{suffix}" in meta
+        assert f"lite.attempt.t1.{suffix}" not in meta
+    assert meta["lite.card.1.attempt.t1.executor_sessions"] == ME

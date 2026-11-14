@@ -14,6 +14,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 
 from litetools import card as cards
@@ -132,6 +133,41 @@ def _close_step(
     forget_claim(ctx.env)
     log.info("closed step %s with gc.outcome=%s: %s", step.bead_id, outcome, reason)
     return Ok(None)
+
+
+class Role(Enum):
+    """Who works on an attempt, as named in its records."""
+
+    EXECUTOR = "executor"
+    REVIEWER = "reviewer"
+
+
+def _attempt_records(ref: CardRef, attempt: Attempt) -> str:
+    """Return the anchor key an attempt's records start with: ``lite.attempt.t1``, ``lite.card.2.attempt.t1``."""
+    return f"{ref.prefix}attempt.{attempt.key}"
+
+
+def _session_records(ctx: Ctx, anchor: Bead, records: str, role: Role) -> dict[str, str]:
+    """Return what the anchor learns about this session working ``role`` on an attempt.
+
+    ``<records>.<role>_sessions`` lists every session that worked the role, in
+    order, so a session gc restarted shows up as a second entry, and
+    ``<records>.<role>_provider`` names the slot, which ties the attempt to a model.
+    """
+    key = f"{records}.{role.value}_sessions"
+    known = [name for name in anchor.meta(key).split(",") if name]
+    values = {} if ctx.env.session in known else {key: ",".join([*known, ctx.env.session])}
+    if ctx.env.provider:
+        values[f"{records}.{role.value}_provider"] = ctx.env.provider
+    return values
+
+
+def _record(ctx: Ctx, anchor: Bead, values: dict[str, str]) -> Result[None, str]:
+    """Write profiling records on the anchor, if there are any."""
+    if not values:
+        return Ok(None)
+    log.debug("recording on %s: %s", anchor.bead_id, values)
+    return ctx.gc.set_metadata(anchor.bead_id, values)
 
 
 def _layout(ctx: Ctx, item: Item) -> Layout:
@@ -638,6 +674,8 @@ def attempt_start(ctx: Ctx) -> Outcome:
     if isinstance(scope, Err):
         return scope
     ref, files = scope.value.ref, scope.value.files
+    records = _attempt_records(ref, attempt)
+    sessions = _session_records(ctx, item.anchor, records, Role.EXECUTOR)
     previous = _rejected_attempt(item, ref)
     if isinstance(previous, Err):
         return previous
@@ -661,6 +699,9 @@ def attempt_start(ctx: Ctx) -> Outcome:
     # new session starts here again: resetting would discard its work.
     if item.step.meta("lite.attempt_started") == "true":
         log.info("resuming %s %s without a reset", item.anchor.bead_id, attempt.key)
+        recorded = _record(ctx, item.anchor, sessions)
+        if isinstance(recorded, Err):
+            return recorded
         lines += [
             "",
             "This attempt was already started by a session that was restarted. The worktree is",
@@ -675,6 +716,9 @@ def attempt_start(ctx: Ctx) -> Outcome:
     marked = ctx.gc.set_metadata(item.step.bead_id, {"lite.attempt_started": "true"})
     if isinstance(marked, Err):
         return marked
+    recorded = _record(ctx, item.anchor, {**sessions, f"{records}.started_at": _now()})
+    if isinstance(recorded, Err):
+        return recorded
     where = "the base commit" if ref.number == 1 else f"where {ref.label} starts"
     if attempt.round > 1 and previous.value is not None:
         lines += [
@@ -814,6 +858,9 @@ def attempt_finish(ctx: Ctx, summary: str | None, blocked: str | None) -> Outcom
     written = _write(scope.value.files.report(attempt), rendered)
     if isinstance(written, Err):
         return written
+    finished = _record(ctx, item.anchor, {f"{_attempt_records(scope.value.ref, attempt)}.finished_at": _now()})
+    if isinstance(finished, Err):
+        return finished
     closed = _close_step(
         ctx, item.step, "pass", f"{attempt.key} attempt {status.value}",
         {"lite.attempt_status": status.value, "lite.attempt_commit": commit},
@@ -861,7 +908,8 @@ def _decision_metadata(
     """
     ref = scope.ref
     approved = verdict is Verdict.APPROVE
-    values = {f"{ref.prefix}attempt.{attempt.key}": "approved" if approved else f"rejected: {why}"}
+    records = _attempt_records(ref, attempt)
+    values = {records: "approved" if approved else f"rejected: {why}", f"{records}.verified_at": _now()}
     if not approved:
         values[f"{ref.prefix}last_rejected"] = attempt.key
     elif ref.is_last:
@@ -1117,6 +1165,13 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
     if isinstance(scope, Err):
         return scope
     layout = scope.value.files
+    records = _attempt_records(scope.value.ref, attempt)
+    reviewer = _session_records(ctx, item.anchor, records, Role.REVIEWER)
+    if not item.anchor.meta(f"{records}.review_started_at"):
+        reviewer[f"{records}.review_started_at"] = _now()
+    recorded = _record(ctx, item.anchor, reviewer)
+    if isinstance(recorded, Err):
+        return recorded
     head = gitops.rev(workdir.value, "HEAD")
     if isinstance(head, Err):
         return head
@@ -1137,6 +1192,9 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
             log.info("done_when for %s %s still running", item.anchor.bead_id, attempt.key)
             return Ok(Done(_still_running_text(state)))
         results.append(waited.value)
+        timed = _record_done_when_time(ctx, item.anchor, records, state, spec)
+        if isinstance(timed, Err):
+            return timed
         # done_when commands leave build products (__pycache__, coverage files)
         # that would make land refuse the worktree as dirty.
         residue = gitops.is_clean(workdir.value)
@@ -1185,6 +1243,21 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
             )
         )
     )
+
+
+def _record_done_when_time(
+    ctx: Ctx, anchor: Bead, records: str, state: donewhen.State, spec: donewhen.Spec
+) -> Result[None, str]:
+    """Record how long the attempt's done_when commands ran, in whole seconds.
+
+    A run whose times cannot be read only loses this record: the checks
+    themselves passed or failed already, and the ladder does not depend on it.
+    """
+    seconds = donewhen.wall_seconds(state, spec)
+    if isinstance(seconds, Err):
+        log.warning("no done_when time for %s: %s", records, seconds.error)
+        return Ok(None)
+    return _record(ctx, anchor, {f"{records}.done_when_seconds": str(round(seconds.value))})
 
 
 def _removed_tests_text(removed: tuple[str, ...]) -> list[str]:
