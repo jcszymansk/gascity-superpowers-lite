@@ -283,3 +283,31 @@ def card_done(commands: tuple[str, ...], workdir: Path, timeout_seconds: int) ->
     """
     outcomes = tuple(run_command(c, workdir, timeout_seconds) for c in commands)
     return card_done_from(outcomes, timeout_seconds)
+
+def base_check(outcomes: tuple[CommandOutcome, ...], reasons: dict[str, str], timeout_seconds: int) -> CheckResult:
+    """Judge a card's ``done_when`` as it ran at the card's base, before any work on the card.
+
+    A command may fail there only when the card's ``## Baseline`` says why: the
+    test or file it checks is what the card adds. Any other failure means the
+    card cannot be met as written (the command is wrong, or it fails for a
+    reason outside the card), and no executor can make it pass. A command
+    the Baseline expects to fail that passes proves nothing about the card.
+
+    Args:
+        outcomes: How each ``done_when`` command ended at the base.
+        reasons: The card's Baseline: why each listed command fails at the base.
+        timeout_seconds: The per-command limit, for the timeout finding.
+    """
+    details: list[str] = []
+    for outcome in outcomes:
+        if not outcome.passed and outcome.command not in reasons:
+            details.append(
+                "fails at the base and '## Baseline' does not say why, so the work cannot make it pass: "
+                + outcome.finding(timeout_seconds)
+            )
+        elif outcome.passed and outcome.command in reasons:
+            details.append(
+                f"'## Baseline' says it fails at the base, but it passes there, so it proves nothing about "
+                f"the card: {outcome.command}"
+            )
+    return CheckResult("base", not details, tuple(details))

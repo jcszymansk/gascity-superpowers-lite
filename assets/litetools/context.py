@@ -235,6 +235,11 @@ class CardLayout:
         """Why ``attempt`` was not approved, for the sessions after it."""
         return self.attempt_dir(attempt) / "findings.md"
 
+    @property
+    def base_dir(self) -> Path:
+        """The run of the card's ``done_when`` at its base, before any attempt."""
+        return self.root / "base"
+
 
 @dataclass(frozen=True, slots=True)
 class Layout:

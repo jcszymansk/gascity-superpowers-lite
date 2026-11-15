@@ -105,7 +105,9 @@ Each bead becomes one item, run by the pack's own agents, each step in a fresh s
    or `tdd-feature`, from `assets/kinds/`) is then pasted in. `cut-card-start` prints a worked
    example card (`assets/templates/card-example.md`), and the step text keeps the cutter to the
    bead and the worktree at `HEAD`, because cutters otherwise go looking for earlier cards and
-   solutions on disk.
+   solutions on disk. `cut-card-finish` runs the first card's `done_when` at `HEAD` and refuses a
+   command that fails there unless the card's `## Baseline` says why (the test it runs is new in
+   the card); a later card gets the same check on its own base before its first attempt.
 3. `executor-t1` does the first card in the worktree. The pack command it finishes with commits the work,
    with a `Bead: <id>` trailer.
 4. The card reviewer of the attempt's tier (`card-reviewer-t1`, `-t2` or `-t3`) runs the checks,
@@ -121,7 +123,10 @@ Each bead becomes one item, run by the pack's own agents, each step in a fresh s
    the next attempt from where the card started, with every earlier round's findings and the last
    diff as context. With no attempts left the card escalates to `executor-t2`, then, after a mail
    to `human` and an approval, to `executor-t3` (see "Approving a T3 attempt"); a later T3 round or
-   attempt needs no second approval. An executor that reports a blocker escalates at once. When
+   attempt needs no second approval. An executor that reports a blocker in the work
+   (`--blocker work`) escalates at once; a blocker in the card (`--blocker card`, or a later card
+   failing its base check) fails the item at once with a mail to `human`, since every tier would
+   get the same card. When
    T3's budget runs out the item fails and `human` gets a mail with the findings. Each tier's
    budget is set below.
 6. `operator` lands every card's work on the item's target branch at once and closes the bead.

@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import shutil
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -35,7 +36,19 @@ from litetools.context import (
     step_attempt,
 )
 from litetools.gc import Bead, Gc
-from litetools.ladder import Action, Attempt, Decision, Tier, TierLimits, Verdict, decide, highest, parse_attempt
+from litetools.ladder import (
+    Action,
+    Attempt,
+    Blocker,
+    Decision,
+    Tier,
+    TierLimits,
+    Verdict,
+    decide,
+    first_attempt,
+    highest,
+    parse_attempt,
+)
 from litetools.result import Err, Ok, Result
 
 log = logging.getLogger(__name__)
@@ -429,6 +442,46 @@ def _prepare(ctx: Ctx, item: Item) -> Result[str, str]:
     return Ok(f"worktree {worktree} on {target} at {base_commit}")
 
 
+# --- base check --------------------------------------------------------------
+
+
+def _base_check(
+    ctx: Ctx, workdir: Path, head: str, card: cards.Card, state: donewhen.State
+) -> Result[checks.CheckResult | None, str]:
+    """Run ``card``'s ``done_when`` at ``head``, before any work on it, and judge it against its Baseline.
+
+    The run happens in the item worktree, which must sit at ``head`` and be
+    clean; it is reset to ``head`` afterwards, since builds leave products.
+
+    Returns:
+        The base check, or None while the commands still run (a later call attaches).
+    """
+    spec = donewhen.Spec(head, card.done_when, workdir, DONE_WHEN_TIMEOUT_SECONDS)
+    waited = donewhen.await_outcomes(state, spec, ctx.env.verify_wait_seconds)
+    if isinstance(waited, Err):
+        return waited
+    if waited.value is None:
+        log.info("done_when at the base %s still running in %s", head[:12], state.root)
+        return Ok(None)
+    restored = gitops.reset_to(workdir, head)
+    if isinstance(restored, Err):
+        return restored
+    result = checks.base_check(waited.value, card.baseline(), DONE_WHEN_TIMEOUT_SECONDS)
+    log.info("base check at %s: %s", head[:12], "pass" if result.passed else "; ".join(result.details))
+    return Ok(result)
+
+
+def _base_running_text(state: donewhen.State, again: str) -> str:
+    return "\n".join(
+        [
+            "The card's done_when commands are running at the base, in a process that survives this session.",
+            f"Its log: {state.log_file}",
+            f"Run `gc superpowers-lite {again}` again now, and keep doing so until it reports a result.",
+            "Do not end your turn meanwhile: gc restarts a session that sits idle while it holds this step.",
+        ]
+    )
+
+
 # --- cut-card ----------------------------------------------------------------
 
 
@@ -608,11 +661,51 @@ def cut_card_finish(ctx: Ctx, blocked: str | None) -> Outcome:
         parsed.append(card.value)
     if errors:
         return _fix_cards(errors)
-    quoted = _context_quote_errors(item, parsed)
-    if isinstance(quoted, Err):
-        return quoted
-    if quoted.value:
-        return _fix_cards(quoted.value)
+    # Only the first card's base exists now; a later card is checked when its
+    # first attempt starts, on the commit the cards before it left.
+    workdir = _workdir(item)
+    if isinstance(workdir, Err):
+        return workdir
+    head = gitops.rev(workdir.value, "HEAD")
+    if isinstance(head, Err):
+        return head
+    base_state = donewhen.State(layout.card(CardRef(1, len(parsed), False)).base_dir)
+    base_spec = donewhen.Spec(head.value, parsed[0].done_when, workdir.value, DONE_WHEN_TIMEOUT_SECONDS)
+    # The base run leaves build output in the worktree, which the quote check
+    # would take for the cutter's writes. A run in progress is waited for, and
+    # quotes are checked once it has finished and the worktree is reset; what
+    # a finished run left is cleared before the check.
+    in_progress = donewhen.running(base_state, base_spec, time.time())
+    if not in_progress:
+        if donewhen.started(base_state, base_spec):
+            cleared = gitops.reset_to(workdir.value, head.value)
+            if isinstance(cleared, Err):
+                return cleared
+        quoted = _context_quote_errors(item, parsed)
+        if isinstance(quoted, Err):
+            return quoted
+        if quoted.value:
+            return _fix_cards(quoted.value)
+    based = _base_check(ctx, workdir.value, head.value, parsed[0], base_state)
+    if isinstance(based, Err):
+        return based
+    if based.value is None:
+        return Ok(Done(_base_running_text(base_state, "cut-card-finish")))
+    if in_progress:
+        quoted = _context_quote_errors(item, parsed)
+        if isinstance(quoted, Err):
+            return quoted
+        if quoted.value:
+            return _fix_cards(quoted.value)
+    if not based.value.passed:
+        return _fix_cards(
+            [f"card 1: done_when at HEAD {head.value[:12]}: {detail}" for detail in based.value.details]
+            + [
+                "a command that fails at HEAD only because the card's work is missing needs a '## Baseline' "
+                "line saying so; fix any other command, leave out a test that already fails, or, when the "
+                "fix belongs to another change, report the bead with --blocked"
+            ]
+        )
     sealed_texts: list[str] = []
     for number, (draft_text, draft_card) in enumerate(zip(texts, parsed, strict=True), start=1):
         checklist = _read(cards.checklist_path(ctx.env.pack_dir, draft_card.kind))
@@ -743,6 +836,14 @@ def attempt_start(ctx: Ctx) -> Outcome:
     reset = gitops.reset_to(workdir.value, start.value)
     if isinstance(reset, Err):
         return reset
+    if ref.number > 1 and attempt == first_attempt(Tier.T1):
+        based = _base_check(ctx, workdir.value, start.value, scope.value.card, donewhen.State(files.base_dir))
+        if isinstance(based, Err):
+            return based
+        if based.value is None:
+            return Ok(Done(_base_running_text(donewhen.State(files.base_dir), "attempt-start")))
+        if not based.value.passed:
+            return _card_fails_at_base(ctx, item, scope.value, attempt, start.value, based.value)
     marked = ctx.gc.set_metadata(item.step.bead_id, {"lite.attempt_started": "true"})
     if isinstance(marked, Err):
         return marked
@@ -764,6 +865,23 @@ def attempt_start(ctx: Ctx) -> Outcome:
     return Ok(Done("\n".join(lines)))
 
 
+def _card_fails_at_base(
+    ctx: Ctx, item: Item, scope: CardScope, attempt: Attempt, base: str, result: checks.CheckResult
+) -> Outcome:
+    """Close the attempt as blocked by the card, without the executor: the card cannot be met as written."""
+    summary = (
+        f"Lite ran the card's done_when at its base {base[:12]} before this attempt, and the card cannot be "
+        "met as written:\n" + "\n".join(f"- {detail}" for detail in result.details)
+    )
+    log.info("%s %s: %s fails at its base; closing the attempt as blocked by the card",
+             item.anchor.bead_id, attempt.key, scope.ref.label)
+    report = reports.Report(item.anchor.bead_id, attempt.tier, reports.Status.BLOCKED, "", summary, Blocker.CARD)
+    recorded = _record_attempt(ctx, item, scope, attempt, report)
+    if isinstance(recorded, Err):
+        return recorded
+    return Ok(Done(f"{summary}\n\nLite closed this attempt for you; there is nothing to do. Exit.", drain=True))
+
+
 def _earlier_attempt_lines(files: CardLayout, previous: Attempt) -> list[str]:
     """Point a fresh attempt at every round's findings of the attempt before it, and at its last diff."""
     findings = [files.findings(r) for r in previous.earlier_rounds() if files.findings(r).exists()]
@@ -780,8 +898,12 @@ def _attempt_finish_lines() -> list[str]:
         "Run builds and tests through `gc superpowers-lite run '<command>'`.",
         "When every done_when command passes, run:",
         '  gc superpowers-lite attempt-finish --summary "<one paragraph: what you changed and why>"',
-        "If the card cannot be done as written, run:",
-        '  gc superpowers-lite attempt-finish --blocked "<what stops you>"',
+        "If the card cannot be met as written (a done_when command fails without your change or",
+        "cannot pass, the card contradicts itself or the code, or it leaves a decision open), run:",
+        '  gc superpowers-lite attempt-finish --blocker card --blocked "<what in the card cannot be met>"',
+        "A stronger model would get the same card, so the item then stops for a human.",
+        "If the card is sound but you cannot make the change work, run:",
+        '  gc superpowers-lite attempt-finish --blocker work --blocked "<what stops you>"',
         "Do not commit, push or touch beads yourself; attempt-finish does it.",
     ]
 
@@ -860,10 +982,23 @@ def _attempt_message(bead_id: str, label: str, summary: str) -> str:
     return f"{subject.rstrip()}\n\n{text}\n\nBead: {bead_id}\n"
 
 
-def attempt_finish(ctx: Ctx, summary: str | None, blocked: str | None) -> Outcome:
-    """Commit the attempt, write its report and close the attempt step."""
+def attempt_finish(ctx: Ctx, summary: str | None, blocked: str | None, blocker: Blocker | None) -> Outcome:
+    """Commit the attempt, write its report and close the attempt step.
+
+    Args:
+        summary: What the attempt changed, when it is done.
+        blocked: Why the attempt stopped, when it is blocked.
+        blocker: Whether the card or the work blocked it; required with ``blocked``.
+    """
     if (summary is None) == (blocked is None):
         return Err("pass exactly one of --summary or --blocked")
+    if blocked is not None and blocker is None:
+        return Err(
+            "say what blocks you with --blocker: card when the card cannot be met as written, "
+            "work when the card is sound but you cannot make the change work"
+        )
+    if summary is not None and blocker is not None:
+        return Err("--blocker goes with --blocked only")
     text = (summary if summary is not None else blocked) or ""
     if not text.strip():
         return Err("the summary or blocker must not be empty")
@@ -889,18 +1024,25 @@ def attempt_finish(ctx: Ctx, summary: str | None, blocked: str | None) -> Outcom
         if isinstance(made, Err):
             return made
         commit = made.value or ""
-    rendered = reports.render(reports.Report(item.anchor.bead_id, attempt.tier, status, commit, text))
-    written = _write(scope.value.files.report(attempt), rendered)
+    report = reports.Report(item.anchor.bead_id, attempt.tier, status, commit, text, blocker)
+    recorded = _record_attempt(ctx, item, scope.value, attempt, report)
+    return recorded if isinstance(recorded, Err) else Ok(Done(f"Attempt recorded ({status.value}).", drain=True))
+
+
+def _record_attempt(ctx: Ctx, item: Item, scope: CardScope, attempt: Attempt, report: reports.Report) -> Result[None, str]:
+    """Write the attempt's report, record when it finished and close the attempt step."""
+    written = _write(scope.files.report(attempt), reports.render(report))
     if isinstance(written, Err):
         return written
-    finished = _record(ctx, item.anchor, {f"{_attempt_records(scope.value.ref, attempt)}.finished_at": _now()})
+    finished = _record(ctx, item.anchor, {f"{_attempt_records(scope.ref, attempt)}.finished_at": _now()})
     if isinstance(finished, Err):
         return finished
+    kind = f" ({report.blocker.value})" if report.blocker is not None else ""
     closed = _close_step(
-        ctx, item.step, "pass", f"{attempt.key} attempt {status.value}",
-        {"lite.attempt_status": status.value, "lite.attempt_commit": commit},
+        ctx, item.step, "pass", f"{attempt.key} attempt {report.status.value}{kind}",
+        {"lite.attempt_status": report.status.value, "lite.attempt_commit": report.commit},
     )
-    return closed if isinstance(closed, Err) else Ok(Done(f"Attempt recorded ({status.value}).", drain=True))
+    return closed if isinstance(closed, Err) else Ok(None)
 
 
 # --- verify and verdict ------------------------------------------------------
@@ -933,7 +1075,8 @@ def _approved_commit(files: CardLayout, attempt: Attempt) -> Result[str, str]:
 
 
 def _decision_metadata(
-    item: Item, scope: CardScope, attempt: Attempt, verdict: Verdict, decision: Decision, why: str
+    item: Item, scope: CardScope, attempt: Attempt, verdict: Verdict, decision: Decision, why: str,
+    blocker: Blocker | None,
 ) -> Result[dict[str, str], str]:
     """Return what the anchor records about a verified attempt.
 
@@ -965,13 +1108,15 @@ def _decision_metadata(
         }
     if decision.action is Action.BLOCKED:
         values["lite.result"] = "blocked"
+        values["lite.blocked_on"] = "card" if blocker is Blocker.CARD else "tiers"
     return Ok(values)
 
 
 def _record_decision(
-    ctx: Ctx, item: Item, scope: CardScope, attempt: Attempt, verdict: Verdict, decision: Decision, why: str
+    ctx: Ctx, item: Item, scope: CardScope, attempt: Attempt, verdict: Verdict, decision: Decision, why: str,
+    blocker: Blocker | None,
 ) -> Result[None, str]:
-    values = _decision_metadata(item, scope, attempt, verdict, decision, why)
+    values = _decision_metadata(item, scope, attempt, verdict, decision, why, blocker)
     if isinstance(values, Err):
         return values
     recorded = ctx.gc.set_metadata(item.anchor.bead_id, values.value)
@@ -986,6 +1131,16 @@ def _record_decision(
             f"Findings: {scope.files.findings(attempt)}\n"
             f"Approve a t3 attempt with: gc superpowers-lite approve --rig {ctx.env.rig} {item.anchor.bead_id}\n"
             "Leave it to keep the item waiting.",
+        )
+    elif decision.action is Action.BLOCKED and blocker is Blocker.CARD:
+        _mail_human(
+            ctx,
+            f"blocked by its card: {item.anchor.bead_id}",
+            f"{item.anchor.bead_id} ({item.anchor.title}) stopped at {attempt.key}{which}: the card cannot be met as\n"
+            "written, so no stronger tier was tried, and the item has failed.\n"
+            f"Findings: {scope.files.findings(attempt)}\n"
+            f"Card: {scope.files.card}\n"
+            f"Every attempt's findings, diff and report: {scope.files.root}",
         )
     elif decision.action is Action.BLOCKED:
         _mail_human(
@@ -1007,13 +1162,13 @@ def _mail_human(ctx: Ctx, subject: str, body: str) -> None:
 
 
 def _close_verify(
-    ctx: Ctx, item: Item, scope: CardScope, attempt: Attempt, verdict: Verdict, why: str, blocked: bool = False
+    ctx: Ctx, item: Item, scope: CardScope, attempt: Attempt, verdict: Verdict, why: str, blocker: Blocker | None = None
 ) -> Outcome:
     limits = _tier_limits(item, attempt.tier)
     if isinstance(limits, Err):
         return limits
-    decision = decide(attempt, verdict, blocked, scope.ref.is_last, limits.value)
-    recorded = _record_decision(ctx, item, scope, attempt, verdict, decision, why)
+    decision = decide(attempt, verdict, blocker, scope.ref.is_last, limits.value)
+    recorded = _record_decision(ctx, item, scope, attempt, verdict, decision, why, blocker)
     if isinstance(recorded, Err):
         return recorded
     which = "" if scope.ref.total == 1 else f"{scope.ref.label} "
@@ -1063,14 +1218,15 @@ class QuickChecks:
         removed: The tests the attempt removes, for the reviewer.
         outside: The files the attempt touches that the card does not list, for the reviewer.
         report: The executor's report, when it parsed.
-        blocked: True when the executor reported a blocker instead of a change.
+        blocker: What the executor reported as blocking it instead of a change,
+            or None when it reported a change.
     """
 
     results: tuple[checks.CheckResult, ...]
     removed: tuple[str, ...]
     outside: tuple[str, ...]
     report: reports.Report | None
-    blocked: bool
+    blocker: Blocker | None
 
 
 def _quick_checks(
@@ -1084,16 +1240,17 @@ def _quick_checks(
     """
     layout, card, prefix = scope.files, scope.card, scope.ref.prefix
     report_result, report = _report_check(layout, attempt, item.anchor.bead_id)
-    blocked = report is not None and report.status is reports.Status.BLOCKED
+    blocker = _blocker_of(report)
     saved = _load_quick(state, head)
     if saved is not None:
         log.info("reusing the quick checks of %s %s at %s", item.anchor.bead_id, attempt.key, head)
-        return Ok(QuickChecks(saved[0], saved[1], saved[2], report, blocked))
+        return Ok(QuickChecks(saved[0], saved[1], saved[2], report, blocker))
     results = [report_result]
     removed: tuple[str, ...] = ()
     outside: tuple[str, ...] = ()
-    if blocked and report is not None:
-        results.append(checks.CheckResult("executor", False, (f"the executor reported a blocker: {report.summary}",)))
+    if blocker is not None and report is not None:
+        what = "the card cannot be met as written" if blocker is Blocker.CARD else "the executor reported a blocker"
+        results.append(checks.CheckResult("executor", False, (f"{what}: {report.summary}",)))
     else:
         clean = gitops.is_clean(workdir)
         if isinstance(clean, Err):
@@ -1128,7 +1285,14 @@ def _quick_checks(
     stored = _store_quick(state, head, results, removed, outside)
     if isinstance(stored, Err):
         return stored
-    return Ok(QuickChecks(tuple(results), removed, outside, report, blocked))
+    return Ok(QuickChecks(tuple(results), removed, outside, report, blocker))
+
+
+def _blocker_of(report: reports.Report | None) -> Blocker | None:
+    """What blocked the attempt; a blocked report from before blockers had a kind counts as the work."""
+    if report is None or report.status is not reports.Status.BLOCKED:
+        return None
+    return report.blocker or Blocker.WORK
 
 
 def _quick_file(state: donewhen.State) -> Path:
@@ -1236,7 +1400,7 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
     removed = quick.value.removed
     outside = quick.value.outside
     report = quick.value.report
-    if not quick.value.blocked:
+    if quick.value.blocker is None:
         spec = donewhen.Spec(head.value, scope.value.card.done_when, workdir.value, DONE_WHEN_TIMEOUT_SECONDS)
         waited = donewhen.await_result(state, spec, ctx.env.verify_wait_seconds)
         if isinstance(waited, Err):
@@ -1273,8 +1437,8 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
             log.info("%s %s failed %s again; restarting the attempt", item.anchor.bead_id, attempt.key, ", ".join(repeated))
             why += f" (again after the previous round: {', '.join(repeated)})"
         # A blocker escalates from the card's base, so it is recorded as the restart it is.
-        choice = Verdict.RESTART if repeated or quick.value.blocked else Verdict.CORRECT
-        return _close_verify(ctx, item, scope.value, attempt, choice, why, blocked=quick.value.blocked)
+        choice = Verdict.RESTART if repeated or quick.value.blocker is not None else Verdict.CORRECT
+        return _close_verify(ctx, item, scope.value, attempt, choice, why, blocker=quick.value.blocker)
     marked = ctx.gc.set_metadata(item.step.bead_id, {"lite.checks": "passed", "lite.checks_at": _now()})
     if isinstance(marked, Err):
         return marked

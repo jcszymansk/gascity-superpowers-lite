@@ -36,6 +36,12 @@ Write one card per file, `1.md`, `2.md` and so on, in the printed directory:
   needs `-I` (or `--include=` globs): repositories keep prebuilt binaries that
   still hold the strings a "these are gone" check looks for, and a card that
   greps them is refused.
+- `## Baseline`: `` - `<command>`: <why> `` for each `done_when` command
+  that fails before the card's work exists because it runs what the card adds.
+  Lite runs every card's `done_when` at its base and refuses one failing there
+  without such a line. A command failing for another reason (a test already
+  failing, a build broken at the base, a wrong command) can never pass: fix it,
+  leave the test out, or report the bead blocked.
 - `## Interfaces`: signatures and types only, no bodies.
 - `## Context`: quote the code the change depends on, exactly, with paths and
   line ranges, so the executor need not search. Quote what exists at HEAD,
@@ -50,7 +56,8 @@ Then run:
 
     gc superpowers-lite cut-card-finish
 
-If it lists problems, fix the cards and run it again. If the bead cannot be
+If it lists problems, fix the cards and run it again. If it says `done_when`
+is still running, run it again at once until it reports. If the bead cannot be
 done at all as written (it is unclear, contradicts the code, or needs a
 decision only a human can make), run instead:
 

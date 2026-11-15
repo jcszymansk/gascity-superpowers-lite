@@ -50,7 +50,18 @@ src/app.txt:1 holds broken.
 ## Out of scope
 
 Everything else.
+
+## Baseline
+
+- `grep -q fixed src/app.txt`: src/app.txt still says broken until the fix.
 """
+
+
+def with_done_when(command: str, card: str = CARD) -> str:
+    """``card`` with its one done_when command, and the Baseline line naming it, replaced by ``command``."""
+    return card.replace('done_when = ["grep -q fixed src/app.txt"]', f"done_when = [{json.dumps(command)}]").replace(
+        "- `grep -q fixed src/app.txt`:", f"- `{command}`:"
+    )
 
 
 def git(repo: Path, *args: str) -> str:
@@ -526,6 +537,125 @@ def test_cut_card_blocked_fails_the_item(world: World) -> None:
     assert world.meta(ANCHOR)["lite.result"] == "uncuttable"
 
 
+def without_baseline(card: str) -> str:
+    return card.split("\n## Baseline\n", 1)[0] + "\n"
+
+
+def test_cut_card_finish_refuses_a_command_that_fails_at_head_without_a_baseline_line(world: World) -> None:
+    prepared(world)
+    world.draft().write_text(without_baseline(CARD))
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 1
+    assert "card 1: done_when at HEAD" in result.stderr
+    assert "fails at the base and '## Baseline' does not say why" in result.stderr
+    assert "exit 1: grep -q fixed src/app.txt" in result.stderr
+    assert world.bead("s-cut")["status"] == "in_progress"
+    assert not (world.card_dir() / "card.md").exists()
+
+
+def test_cut_card_finish_refuses_a_baseline_line_for_a_command_that_passes_at_head(world: World) -> None:
+    prepared(world)
+    world.draft().write_text(with_done_when("grep -q broken src/app.txt"))
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 1
+    assert "passes there, so it proves nothing" in result.stderr and "grep -q broken src/app.txt" in result.stderr
+    assert world.bead("s-cut")["status"] == "in_progress"
+
+
+def test_cut_card_finish_accepts_a_command_that_passes_at_head_with_no_baseline(world: World) -> None:
+    prepared(world)
+    world.draft().write_text(without_baseline(with_done_when("test -f src/app.txt")))
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 0, result.stderr
+    assert world.meta("s-cut")["gc.outcome"] == "pass"
+
+
+def test_cut_card_finish_refuses_a_baseline_line_naming_no_done_when_command(world: World) -> None:
+    prepared(world)
+    world.draft().write_text(CARD + "- `make test`: the target is new.\n")
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 1
+    assert "with a command exactly as in done_when" in result.stderr
+
+
+def test_cut_card_finish_waits_for_a_slow_base_run_and_a_second_call_attaches(world: World) -> None:
+    prepared(world)
+    world.draft().write_text(slow_card(world, ""))
+    first = world.claim_and_run("s-cut", "cut-card", "cut-card-finish", env=SHORT_WAIT)
+    assert first.returncode == 0, first.stderr
+    assert "running at the base" in first.stdout and "cut-card-finish` again" in first.stdout
+    assert world.bead("s-cut")["status"] == "in_progress"
+    second = world.run("cut-card-finish")
+    assert second.returncode == 0, second.stderr
+    assert world.meta("s-cut")["gc.outcome"] == "pass"
+    assert runs(world) == 1
+
+
+def test_a_slow_base_run_that_leaves_output_does_not_fail_the_quote_check(world: World) -> None:
+    prepared(world)
+    world.draft().write_text(slow_card(world, "touch residue.txt && "))
+    first = world.claim_and_run("s-cut", "cut-card", "cut-card-finish", env=SHORT_WAIT)
+    assert "running at the base" in first.stdout, first.stderr
+    attached = world.run("cut-card-finish", env=SHORT_WAIT)
+    assert attached.returncode == 0 and "running at the base" in attached.stdout, attached.stderr
+    for _ in range(100):
+        if (world.card_dir() / "base" / "result.json").exists():
+            break
+        subprocess.run(["sleep", "0.1"], check=True)
+    finished = world.run("cut-card-finish")
+    assert finished.returncode == 0, finished.stderr
+    assert world.meta("s-cut")["gc.outcome"] == "pass"
+    assert not (world.worktree / "residue.txt").exists()
+
+
+def test_the_base_run_leaves_the_worktree_as_it_found_it(world: World) -> None:
+    sealed(world, with_done_when("touch residue.txt && grep -q fixed src/app.txt"))
+    assert not (world.worktree / "residue.txt").exists()
+    assert git(world.worktree, "status", "--porcelain") == ""
+
+
+def test_cut_card_finish_checks_only_the_first_card_at_head(world: World) -> None:
+    prepared(world)
+    world.draft(1).write_text(CARD)
+    world.draft(2).write_text(without_baseline(CARD_2))
+    result = world.claim_and_run("s-cut", "cut-card", "cut-card-finish")
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_later_card_failing_at_its_base_is_blocked_by_the_card_without_an_executor(world: World) -> None:
+    prepared(world)
+    world.draft(1).write_text(CARD)
+    world.draft(2).write_text(without_baseline(CARD_2))
+    assert world.claim_and_run("s-cut", "cut-card", "cut-card-finish").returncode == 0
+    commit = pass_first_card(world)
+    started = world.claim_and_run("s-att-c2", "attempt", "attempt-start", tier="t1")
+    assert started.returncode == 0, started.stderr
+    assert f"done_when at its base {commit[:12]}" in started.stdout
+    assert "Lite closed this attempt for you" in started.stdout
+    assert world.meta("s-att-c2")["lite.attempt_status"] == "blocked"
+    report = (world.card_dir(2) / "attempts" / "t1" / "report.md").read_text()
+    assert 'blocker = "card"' in report and "grep -q polished src/app.txt" in report
+    assert "lite.card.2.attempt.t1.finished_at" in world.meta(ANCHOR)
+    verdict = verified(world, "t1", name="s-ver-c2")
+    assert verdict.returncode == 0, verdict.stderr
+    assert output(world, "s-ver-c2") == {"next": []}
+    assert world.meta("s-ver-c2")["gc.outcome"] == "fail"
+    assert world.meta(ANCHOR)["lite.result"] == "blocked" and world.meta(ANCHOR)["lite.blocked_on"] == "card"
+    mail = world.state["mail"]
+    assert len(mail) == 1 and mail[0]["subject"] == "blocked by its card: st-1"
+    assert "no stronger tier was tried" in mail[0]["body"]
+
+
+def test_a_later_card_explained_by_its_baseline_starts_for_the_executor(world: World) -> None:
+    sealed_two(world)
+    pass_first_card(world)
+    started = world.claim_and_run("s-att-c2", "attempt", "attempt-start", tier="t1")
+    assert started.returncode == 0, started.stderr
+    assert "Lite closed this attempt" not in started.stdout
+    assert world.meta("s-att-c2")["lite.attempt_started"] == "true"
+    assert (world.card_dir(2) / "base" / "result.json").exists()
+
+
 # --- attempts, verify and verdict --------------------------------------------------
 
 
@@ -655,7 +785,7 @@ def slow_card(world: World, before: str) -> str:
     """A card whose done_when first runs ``before``, sleeps, then counts its runs."""
     counter = world.tmp / "done_when_runs"
     command = f"{before}sleep 2 && echo ran >> {counter} && grep -q fixed src/app.txt"
-    return CARD.replace('done_when = ["grep -q fixed src/app.txt"]', f"done_when = [{json.dumps(command)}]")
+    return with_done_when(command)
 
 
 def runs(world: World) -> int:
@@ -669,6 +799,7 @@ def checks_dir(world: World, key: str = "t1") -> Path:
 
 def test_slow_done_when_leaves_the_step_open_and_a_second_verify_attaches(world: World) -> None:
     sealed(world, slow_card(world, ""))
+    at_base = runs(world)
     attempted(world, "t1", "fixed\n")
     first = world.claim_and_run("s-ver-t1", "verify", "verify", tier="t1", env=SHORT_WAIT)
     assert first.returncode == 0, first.stderr
@@ -679,7 +810,7 @@ def test_slow_done_when_leaves_the_step_open_and_a_second_verify_attaches(world:
     assert second.returncode == 0, second.stderr
     assert world.meta("s-ver-t1")["lite.checks"] == "passed"
     assert "Every check passed" in second.stdout
-    assert runs(world) == 1
+    assert runs(world) == at_base + 1
 
 
 def test_build_products_of_a_running_check_do_not_fail_worktree_clean(world: World) -> None:
@@ -695,6 +826,7 @@ def test_build_products_of_a_running_check_do_not_fail_worktree_clean(world: Wor
 
 def test_a_runner_that_died_without_a_result_is_started_again(world: World) -> None:
     sealed(world, slow_card(world, ""))
+    at_base = runs(world)
     attempted(world, "t1", "fixed\n")
     first = world.claim_and_run("s-ver-t1", "verify", "verify", tier="t1", env=SHORT_WAIT)
     assert "still running" in first.stdout, first.stderr
@@ -708,7 +840,7 @@ def test_a_runner_that_died_without_a_result_is_started_again(world: World) -> N
     second = world.run("verify")
     assert second.returncode == 0, second.stderr
     assert world.meta("s-ver-t1")["lite.checks"] == "passed"
-    assert runs(world) == 1
+    assert runs(world) == at_base + 1
 
 
 def test_verdict_needs_passing_checks_and_a_reason_to_reject(world: World) -> None:
@@ -809,11 +941,37 @@ def test_an_attempt_that_changes_nothing_is_rejected(world: World) -> None:
 def test_a_blocked_attempt_escalates(world: World) -> None:
     sealed(world)
     world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
-    assert world.run("attempt-finish", "--blocked", "the file is generated").returncode == 0
+    assert world.run("attempt-finish", "--blocker", "work", "--blocked", "the file is generated").returncode == 0
     assert verified(world, "t1").returncode == 0
     findings = (world.card_dir() / "attempts" / "t1" / "findings.md").read_text()
     assert "the file is generated" in findings
     assert output(world, "s-ver-t1") == nxt("t2")
+
+
+def test_a_card_blocker_blocks_the_item_at_once_and_mails_a_human(world: World) -> None:
+    sealed(world)
+    world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
+    finished = world.run("attempt-finish", "--blocker", "card", "--blocked", "done_when needs a main class the card forbids")
+    assert finished.returncode == 0, finished.stderr
+    assert verified(world, "t1").returncode == 0
+    findings = (world.card_dir() / "attempts" / "t1" / "findings.md").read_text()
+    assert "the card cannot be met as written: done_when needs a main class" in findings
+    assert output(world, "s-ver-t1") == {"next": []}
+    assert world.meta("s-ver-t1")["gc.outcome"] == "fail"
+    assert world.meta(ANCHOR)["lite.result"] == "blocked" and world.meta(ANCHOR)["lite.blocked_on"] == "card"
+    mail = world.state["mail"]
+    assert len(mail) == 1 and mail[0]["to"] == "human" and mail[0]["subject"] == "blocked by its card: st-1"
+    assert str(world.card_dir() / "attempts" / "t1" / "findings.md") in mail[0]["body"]
+
+
+def test_attempt_finish_needs_a_blocker_kind_with_blocked_and_only_then(world: World) -> None:
+    sealed(world)
+    world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
+    missing = world.run("attempt-finish", "--blocked", "b")
+    assert missing.returncode == 1 and "--blocker" in missing.stderr
+    extra = world.run("attempt-finish", "--summary", "a", "--blocker", "card")
+    assert extra.returncode == 1 and "--blocker goes with --blocked only" in extra.stderr
+    assert world.bead("s-att-t1")["status"] == "in_progress"
 
 
 def test_t1_retry_starts_from_the_rejected_attempt_and_sees_its_findings(world: World) -> None:
@@ -891,7 +1049,7 @@ def test_an_attempt_needs_the_recorded_budget(world: World) -> None:
 def test_t2_starts_from_the_base_and_sees_t1_findings(world: World) -> None:
     sealed(world)
     world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
-    assert world.run("attempt-finish", "--blocked", "the file is generated").returncode == 0
+    assert world.run("attempt-finish", "--blocker", "work", "--blocked", "the file is generated").returncode == 0
     assert verified(world, "t1").returncode == 0
     (world.worktree / "build").mkdir()
     (world.worktree / "build" / "cache").write_text("keep")
@@ -924,6 +1082,7 @@ def test_rejection_at_t3_blocks_and_fails(world: World) -> None:
     assert output(world, "s-ver-t3") == {"next": []}
     assert world.meta("s-ver-t3")["gc.outcome"] == "fail"
     assert world.meta(ANCHOR)["lite.result"] == "blocked"
+    assert world.meta(ANCHOR)["lite.blocked_on"] == "tiers"
     mail = world.state["mail"]
     assert len(mail) == 1 and mail[0]["to"] == "human" and mail[0]["subject"] == "blocked: st-1"
     assert "failed at every tier" in mail[0]["body"] and "failed checks: card-done" in mail[0]["body"]
@@ -1012,7 +1171,7 @@ def test_land_and_close_anchor(world: World) -> None:
 
 def test_verify_restores_the_worktree_that_done_when_dirtied_so_land_succeeds(world: World) -> None:
     messy = "grep -q fixed src/app.txt && mkdir -p cache build && touch cache/residue build/kept && echo noise >> tests/app_test.txt"
-    sealed(world, CARD.replace('done_when = ["grep -q fixed src/app.txt"]', f"done_when = [{json.dumps(messy)}]"))
+    sealed(world, with_done_when(messy))
     attempted(world, "t1", "fixed\n")
     commit = world.meta("s-att-t1")["lite.attempt_commit"]
     result = verified(world, "t1")
@@ -1348,7 +1507,7 @@ def test_an_attempt_records_its_session_slot_and_times(world: World) -> None:
 def test_a_blocked_attempt_records_when_it_finished(world: World) -> None:
     sealed(world)
     world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
-    assert world.run("attempt-finish", "--blocked", "the file is generated").returncode == 0
+    assert world.run("attempt-finish", "--blocker", "work", "--blocked", "the file is generated").returncode == 0
     assert STAMP.fullmatch(world.meta(ANCHOR)["lite.attempt.t1.finished_at"])
 
 
@@ -1430,7 +1589,7 @@ def test_failed_checks_record_the_verdict_time_without_a_review(world: World) ->
 def test_a_blocked_attempt_records_no_done_when_time(world: World) -> None:
     sealed(world)
     world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
-    assert world.run("attempt-finish", "--blocked", "the file is generated").returncode == 0
+    assert world.run("attempt-finish", "--blocker", "work", "--blocked", "the file is generated").returncode == 0
     assert verified(world, "t1").returncode == 0
     meta = world.meta(ANCHOR)
     assert "lite.attempt.t1.done_when_seconds" not in meta
@@ -1541,7 +1700,7 @@ def test_a_different_check_failing_in_the_next_round_asks_for_another_correction
 def test_a_blocker_escalates_past_the_attempts_left(world: World) -> None:
     budgeted(world, t1_attempts="3", t1_rounds="3")
     world.claim_and_run("s-att-t1", "attempt", "attempt-start", tier="t1")
-    assert world.run("attempt-finish", "--blocked", "the file is generated").returncode == 0
+    assert world.run("attempt-finish", "--blocker", "work", "--blocked", "the file is generated").returncode == 0
     assert verified(world, "t1").returncode == 0
     assert output(world, "s-ver-t1") == nxt("t2")
     assert world.meta(ANCHOR)["lite.attempt.t1"] == "restart: failed checks: executor"

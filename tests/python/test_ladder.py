@@ -5,6 +5,7 @@ import pytest
 from litetools.ladder import (
     Action,
     Attempt,
+    Blocker,
     Tier,
     TierLimits,
     Verdict,
@@ -33,9 +34,9 @@ ATTEMPTS = [Attempt(Tier.T1, 1, 1), Attempt(Tier.T1, 2, 3), Attempt(Tier.T2, 1, 
 
 
 @pytest.mark.parametrize("attempt", ATTEMPTS)
-@pytest.mark.parametrize("blocked", [False, True])
-def test_approval_of_the_last_card_lands(attempt: Attempt, blocked: bool) -> None:
-    decision = decide(attempt, Verdict.APPROVE, blocked, last_card=True, limits=ONE)
+@pytest.mark.parametrize("blocker", [None, Blocker.WORK, Blocker.CARD])
+def test_approval_of_the_last_card_lands(attempt: Attempt, blocker: Blocker | None) -> None:
+    decision = decide(attempt, Verdict.APPROVE, blocker, last_card=True, limits=ONE)
     assert decision.action is Action.LAND and decision.next_attempt is None and not decision.gate
     assert decision.outcome == "pass"
     assert next_of(decision.output_json) == [entry("land")]
@@ -43,7 +44,7 @@ def test_approval_of_the_last_card_lands(attempt: Attempt, blocked: bool) -> Non
 
 @pytest.mark.parametrize("attempt", ATTEMPTS)
 def test_approval_with_cards_left_starts_the_next_card_at_t1(attempt: Attempt) -> None:
-    decision = decide(attempt, Verdict.APPROVE, False, last_card=False, limits=WIDE)
+    decision = decide(attempt, Verdict.APPROVE, None, last_card=False, limits=WIDE)
     assert decision.action is Action.T1 and decision.next_attempt == first_attempt(Tier.T1)
     assert next_of(decision.output_json) == [entry("t1")]
 
@@ -51,43 +52,43 @@ def test_approval_with_cards_left_starts_the_next_card_at_t1(attempt: Attempt) -
 @pytest.mark.parametrize("last_card", [True, False])
 @pytest.mark.parametrize("verdict", [Verdict.CORRECT, Verdict.RESTART])
 def test_a_verdict_other_than_approve_ignores_the_cards_left(last_card: bool, verdict: Verdict) -> None:
-    decision = decide(first_attempt(Tier.T1), verdict, False, last_card, WIDE)
+    decision = decide(first_attempt(Tier.T1), verdict, None, last_card, WIDE)
     assert decision.action is Action.T1
 
 
 def test_correct_with_rounds_left_runs_the_next_round_of_the_same_attempt() -> None:
-    decision = decide(Attempt(Tier.T2, 2, 1), Verdict.CORRECT, False, True, WIDE)
+    decision = decide(Attempt(Tier.T2, 2, 1), Verdict.CORRECT, None, True, WIDE)
     assert decision.action is Action.T2 and decision.next_attempt == Attempt(Tier.T2, 2, 2)
     assert decision.outcome == "pass"
     assert next_of(decision.output_json) == [entry("t2", 2, 2)]
 
 
 def test_correct_in_the_last_round_starts_the_next_attempt() -> None:
-    decision = decide(Attempt(Tier.T1, 1, 3), Verdict.CORRECT, False, True, WIDE)
+    decision = decide(Attempt(Tier.T1, 1, 3), Verdict.CORRECT, None, True, WIDE)
     assert decision.next_attempt == Attempt(Tier.T1, 2, 1)
     assert next_of(decision.output_json) == [entry("t1", 2, 1)]
 
 
 def test_restart_skips_the_rounds_left_and_starts_the_next_attempt() -> None:
-    decision = decide(Attempt(Tier.T1, 1, 1), Verdict.RESTART, False, True, WIDE)
+    decision = decide(Attempt(Tier.T1, 1, 1), Verdict.RESTART, None, True, WIDE)
     assert decision.next_attempt == Attempt(Tier.T1, 2, 1)
 
 
 @pytest.mark.parametrize("verdict", [Verdict.CORRECT, Verdict.RESTART])
 def test_the_last_round_of_the_last_attempt_escalates_from_t1_to_t2(verdict: Verdict) -> None:
-    decision = decide(Attempt(Tier.T1, 3, 3), verdict, False, True, WIDE)
+    decision = decide(Attempt(Tier.T1, 3, 3), verdict, None, True, WIDE)
     assert decision.action is Action.T2 and decision.next_attempt == first_attempt(Tier.T2)
     assert not decision.gate
     assert next_of(decision.output_json) == [entry("t2")]
 
 
 def test_restart_in_the_last_attempt_escalates_even_with_rounds_left() -> None:
-    decision = decide(Attempt(Tier.T1, 3, 1), Verdict.RESTART, False, True, WIDE)
+    decision = decide(Attempt(Tier.T1, 3, 1), Verdict.RESTART, None, True, WIDE)
     assert decision.action is Action.T2
 
 
 def test_escalating_into_t3_opens_the_human_gate() -> None:
-    decision = decide(Attempt(Tier.T2, 1, 1), Verdict.RESTART, False, True, ONE)
+    decision = decide(Attempt(Tier.T2, 1, 1), Verdict.RESTART, None, True, ONE)
     assert decision.action is Action.T3 and decision.next_attempt == first_attempt(Tier.T3)
     assert decision.gate
     assert next_of(decision.output_json) == [entry("t3", gate="yes")]
@@ -97,14 +98,14 @@ def test_escalating_into_t3_opens_the_human_gate() -> None:
     ("verdict", "following"), [(Verdict.CORRECT, Attempt(Tier.T3, 1, 2)), (Verdict.RESTART, Attempt(Tier.T3, 2, 1))]
 )
 def test_later_t3_sessions_need_no_second_approval(verdict: Verdict, following: Attempt) -> None:
-    decision = decide(first_attempt(Tier.T3), verdict, False, True, WIDE)
+    decision = decide(first_attempt(Tier.T3), verdict, None, True, WIDE)
     assert decision.next_attempt == following and not decision.gate
     assert next_of(decision.output_json)[0]["gate"] == "no"
 
 
 @pytest.mark.parametrize("verdict", [Verdict.CORRECT, Verdict.RESTART])
 def test_the_end_of_the_t3_budget_blocks_and_fails_with_no_next_step(verdict: Verdict) -> None:
-    decision = decide(Attempt(Tier.T3, 1, 1), verdict, False, True, ONE)
+    decision = decide(Attempt(Tier.T3, 1, 1), verdict, None, True, ONE)
     assert decision.action is Action.BLOCKED and decision.next_attempt is None and not decision.gate
     assert decision.outcome == "fail"
     assert next_of(decision.output_json) == []
@@ -115,8 +116,20 @@ def test_the_end_of_the_t3_budget_blocks_and_fails_with_no_next_step(verdict: Ve
 )
 @pytest.mark.parametrize("verdict", [Verdict.CORRECT, Verdict.RESTART])
 def test_a_blocker_escalates_at_once_whatever_the_budget_leaves(tier: Tier, action: Action, verdict: Verdict) -> None:
-    decision = decide(first_attempt(tier), verdict, True, True, WIDE)
+    decision = decide(first_attempt(tier), verdict, Blocker.WORK, True, WIDE)
     assert decision.action is action
+
+
+@pytest.mark.parametrize("attempt", [first_attempt(Tier.T1), Attempt(Tier.T1, 1, 2), first_attempt(Tier.T2)])
+@pytest.mark.parametrize("verdict", [Verdict.CORRECT, Verdict.RESTART])
+@pytest.mark.parametrize("last_card", [False, True])
+def test_a_card_blocker_blocks_at_once_without_a_higher_tier_or_the_gate(
+    attempt: Attempt, verdict: Verdict, last_card: bool
+) -> None:
+    decision = decide(attempt, verdict, Blocker.CARD, last_card, WIDE)
+    assert decision.action is Action.BLOCKED and decision.next_attempt is None and not decision.gate
+    assert decision.outcome == "fail"
+    assert next_of(decision.output_json) == []
 
 
 def test_tier_limits_allow_only_attempts_inside_them() -> None:

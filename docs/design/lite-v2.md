@@ -359,7 +359,7 @@ The `verify` command runs every check in the reviewer's session, before the revi
 | Check | Fails when |
 |---|---|
 | `report-valid` | the executor's report is missing or malformed |
-| `executor` | the executor reported a blocker instead of a change |
+| `executor` | the executor reported a blocker instead of a change: in the card, or in the work |
 | `worktree-clean` | the attempt left uncommitted changes |
 | `non-empty-diff` | the diff is empty |
 | `no-skip-markers` | the diff adds a skip or ignore marker |
@@ -506,9 +506,14 @@ Verdicts the reviewer does not write:
 - A failed check counts as correct, so the next round sees the check output. The same check
   failing in two consecutive rounds of one attempt counts as restart. Verify records the failed
   checks as `<records>.failed_checks` to compare them.
-- An executor that reported a blocker skips the tier's remaining rounds and attempts and
-  escalates, as today: the same model would stop in the same place. It is recorded as a restart,
-  since the next tier starts from the card's base.
+- An executor that reported a blocker in the work (`--blocker work`) skips the tier's remaining
+  rounds and attempts and escalates, as today: the same model would stop in the same place. It is
+  recorded as a restart, since the next tier starts from the card's base.
+- A blocker in the card (`--blocker card`, or lite's base check, below) blocks the item at once,
+  whatever the tier and budget, and skips the T3 gate: every tier gets the same card and stops in
+  the same place. The anchor records `lite.blocked_on = card` (`tiers` for an item that ran out of
+  tiers), and the mail says no stronger tier was tried. A report written before blockers had a
+  kind counts as a work blocker.
 
 A tier runs up to `attempts × rounds` executor sessions and at most as many reviews. Only
 attempts that pass every check reach a reviewer.
@@ -616,6 +621,35 @@ session. A blocked item mails `human` with the last finding and where every atte
 as the "Per-item loop" diagram already said; before this only the T3 gate mailed. Checked with
 `gc formula show` on gc 1.5.1: `gate=yes` compiles the gate and approval, `gate=no` leaves them
 out, and the item's verify fanout passes all four vars.
+
+### Base check of done_when
+
+Built 2026-11-15, after five days of one city's history (38 items, 40 cards, 62 attempts): every one
+of the 6 cards that blocked did so because the card could not be met as written, never because
+the code was too hard for the tier. Four named a test or build that already failed on the base
+(a broken `generateOpenApiDocs` on develop, specs failing before any change), one ran `ng test`
+without the project it needed, one forbade the main class its own `build` command required. Each
+then climbed every tier, and two parked at the T3 gate, since the blocker escalated.
+
+So `done_when` runs once at each card's base, before any attempt, and must make sense there:
+
+- The card gains an optional `## Baseline` section: one line per command expected to fail before
+  the card's work exists, `` - `<command>`: <why> ``, with the command exactly as in `done_when`
+  (a new spec it runs, a file it greps for). Commands are matched whole, longest first, so a
+  command holding a backtick stays expressible.
+- `cut-card-finish` runs the first card's commands at HEAD, the card's base, in the detached
+  runner (`<card>/base/`), then resets the worktree. A command that fails without a Baseline
+  line, or one listed that passes, refuses the cards with the output tail, so the cutter fixes
+  the command, leaves out a test that already fails, or reports the bead blocked.
+- A later card's base is the commit the cards before it leave, which exists only once they pass.
+  Its first T1 `attempt-start` runs the same check after the reset, before the executor gets the
+  card; on a failure lite closes the attempt itself with a `card` blocker, and verify blocks the
+  item without spending an executor session.
+- A run that outlasts `LITE_VERIFY_WAIT_SECONDS` leaves the step open and says so; calling the
+  command again attaches to the run, as `verify` does.
+
+The cost is one `done_when` run per card (22 to 71 s in that city, minutes for a full Gradle build);
+one blocked card cost two to four executor sessions and reviews before.
 
 ### Logging
 

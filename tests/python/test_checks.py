@@ -180,3 +180,27 @@ def test_added_lines_skip_headers_and_keep_content() -> None:
     diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1,2 @@\n-old\n+new line\n+\n+++not a header\n"
     assert checks.added_lines(diff) == ("new line", "")
     assert checks.added_lines("") == ()
+
+
+def outcome(command: str, exit_code: int | None) -> checks.CommandOutcome:
+    return checks.CommandOutcome(command, exit_code, "tail of output")
+
+
+def test_base_check_passes_explained_failures_and_unlisted_passes() -> None:
+    result = checks.base_check(
+        (outcome("new test", 1), outcome("build", 0)), {"new test": "the test is new"}, 60
+    )
+    assert result == checks.CheckResult("base", True, ())
+
+
+def test_base_check_names_a_failure_the_baseline_does_not_explain_with_its_output() -> None:
+    result = checks.base_check((outcome("build", 2), outcome("lint", None)), {}, 60)
+    assert result.name == "base" and not result.passed
+    assert len(result.details) == 2
+    assert "does not say why" in result.details[0] and "exit 2: build\ntail of output" in result.details[0]
+    assert "timed out after 60s: lint" in result.details[1]
+
+
+def test_base_check_refuses_a_listed_command_that_passes_at_the_base() -> None:
+    result = checks.base_check((outcome("new test", 0),), {"new test": "the test is new"}, 60)
+    assert not result.passed and "proves nothing about the card: new test" in result.details[0]

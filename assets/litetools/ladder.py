@@ -9,14 +9,18 @@ every round after the first continues from the previous round's commit::
             └ last round ─┐
     restart ─ attempts left ──────► next attempt at this tier, from the card's base
             └ last attempt ───────► escalate: t1 ► t2 ► (human gate) t3 ► blocked
-    executor blocker ─────────────► escalate at once
+    executor blocker: work ───────► escalate at once
+    executor blocker: card ───────► blocked at once, whatever the tier
 
 An item whose bead was cut into several cards climbs the ladder once per card,
 in card order; every card starts again at t1. Only the last card's approval
 lands, so the target branch receives the item's cards together or not at all.
 
 A blocker skips the tier's remaining rounds and attempts, because the same
-model would stop at the same place. The human gate opens once, when a card
+model would stop at the same place. A blocker in the card itself (a
+``done_when`` command that fails without the change, rules that contradict
+each other or the code) skips the higher tiers too: they would get the same
+card and stop at the same place, so the item stops for a human. The human gate opens once, when a card
 first escalates into t3, not again for later t3 attempts or rounds.
 
 The verify step writes the decision as ``gc.output_json``; its
@@ -50,6 +54,15 @@ class Verdict(Enum):
     APPROVE = "approve"
     CORRECT = "correct"
     RESTART = "restart"
+
+
+class Blocker(Enum):
+    """What stopped an executor that reported a blocker."""
+
+    CARD = "card"
+    """The card cannot be met as written; no executor can finish it."""
+    WORK = "work"
+    """The card is sound, but this executor could not make the change work."""
 
 
 class Action(Enum):
@@ -188,28 +201,37 @@ def _next(action: Action, attempt: Attempt | None, gate: bool = False) -> Decisi
     return Decision(action, attempt, gate, "pass", json.dumps({"next": [entry]}))
 
 
+def _blocked() -> Decision:
+    return Decision(Action.BLOCKED, None, False, "fail", json.dumps({"next": []}))
+
+
 def _escalate(tier: Tier) -> Decision:
     action = _ESCALATION[tier]
     if action is Action.BLOCKED:
-        return Decision(action, None, False, "fail", json.dumps({"next": []}))
+        return _blocked()
     return _next(action, first_attempt(Tier(action.value)), gate=action is Action.T3)
 
 
-def decide(attempt: Attempt, verdict: Verdict, blocked: bool, last_card: bool, limits: TierLimits) -> Decision:
+def decide(
+    attempt: Attempt, verdict: Verdict, blocker: Blocker | None, last_card: bool, limits: TierLimits
+) -> Decision:
     """Return the decision for ``attempt`` after ``verdict``.
 
     Args:
         attempt: The attempt just verified.
         verdict: Approve, correct or restart.
-        blocked: True when the executor reported a blocker, which another
-            session of the same model would hit again.
+        blocker: What the executor reported as blocking it, or None when it
+            reported none. Another session of the same model would hit a
+            ``WORK`` blocker again, and every tier a ``CARD`` blocker.
         last_card: False when the item has cards after the one ``attempt``
             served, so an approval moves on to the next card instead of landing.
         limits: The budget of ``attempt``'s tier.
     """
     if verdict is Verdict.APPROVE:
         return _next(Action.LAND, None) if last_card else _next(Action.T1, first_attempt(Tier.T1))
-    if blocked:
+    if blocker is Blocker.CARD:
+        return _blocked()
+    if blocker is Blocker.WORK:
         return _escalate(attempt.tier)
     action = Action(attempt.tier.value)
     if verdict is Verdict.CORRECT and attempt.round < limits.rounds:

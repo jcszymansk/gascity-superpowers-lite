@@ -30,6 +30,14 @@ work already in the worktree.
 Finish with exactly one of these, then exit:
 
     gc superpowers-lite attempt-finish --summary "<what you changed and why>"
-    gc superpowers-lite attempt-finish --blocked "<what stops you>"
+    gc superpowers-lite attempt-finish --blocker card --blocked "<what in the card cannot be met>"
+    gc superpowers-lite attempt-finish --blocker work --blocked "<what stops you>"
+
+Use `--blocker card` when the card cannot be met as written: a `done_when`
+command fails without your change or cannot pass, the card contradicts itself
+or the code, or it leaves open a decision you must not make. A stronger model
+would get the same card, so the item stops for a human. Use `--blocker work`
+when the card is sound but you cannot make the change work; a stronger tier
+tries next.
 
 Do not commit, push, or touch beads; attempt-finish commits for you.

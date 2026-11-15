@@ -183,6 +183,11 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def started(state: State, spec: Spec) -> bool:
+    """Return True when this run was started, whether it still runs, finished or died."""
+    return spec.matches(_load(state.run_file))
+
+
 def running(state: State, spec: Spec, now: float) -> bool:
     """Return True while a runner for this run is starting or alive."""
     if not spec.matches(_load(state.run_file)):

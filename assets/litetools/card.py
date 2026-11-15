@@ -19,7 +19,14 @@ hundreds of files with no risk, and a hard fix one file. A card's size is
 judged by effort, not by file count. Files an attempt touches outside the list
 go to the reviewer, not to a check.
 
-The body must hold every section in ``CUTTER_SECTIONS``. ``## Checklist`` is
+The body must hold every section in ``CUTTER_SECTIONS``. ``## Baseline`` is
+optional: one bullet per ``done_when`` command that fails before the card's
+work exists, naming the command in backticks and why it fails there::
+
+    - `npx ng test --include='**/parse.spec.ts'`: parse.spec.ts is new in this card
+
+Lite runs ``done_when`` at the card's base and refuses a card whose command
+fails there without such a line (``base_failures``). ``## Checklist`` is
 never written by a model: ``seal`` pastes the kind's checklist from the pack,
 so every harness and model gets the same text.
 
@@ -75,6 +82,7 @@ class Section(Enum):
     CONTEXT = "Context"
     STEPS = "Steps"
     OUT_OF_SCOPE = "Out of scope"
+    BASELINE = "Baseline"
     CHECKLIST = CHECKLIST_HEADING
 
 
@@ -115,6 +123,41 @@ class Card:
     def section(self, section: Section) -> str:
         """Return the body of ``section``, or an empty string if absent."""
         return next((body for name, body in self.sections if name is section), "")
+
+    def baseline(self) -> dict[str, str]:
+        """Return why each ``done_when`` command named in ``## Baseline`` fails at the card's base."""
+        reasons, _ = _baseline_lines(self.section(Section.BASELINE), self.done_when)
+        return reasons
+
+
+def _baseline_lines(text: str, done_when: tuple[str, ...]) -> tuple[dict[str, str], list[str]]:
+    """Read ``## Baseline``: the reason given for each command, and every malformed line.
+
+    A line is ``- `<command>`: <reason>`` with the command exactly as in
+    ``done_when``. Matching whole commands, longest first, instead of
+    splitting on backticks keeps commands that hold a backtick expressible.
+    """
+    by_length = sorted(done_when, key=len, reverse=True)
+    reasons: dict[str, str] = {}
+    errors: list[str] = []
+    for line in (raw.strip() for raw in text.splitlines()):
+        if not line:
+            continue
+        command = next((c for c in by_length if line.startswith(f"- `{c}`:")), None)
+        if command is None:
+            errors.append(
+                f"'## Baseline' line {line[:80]!r} must be '- `<command>`: <why it fails at the base>' "
+                "with a command exactly as in done_when"
+            )
+            continue
+        reason = line.removeprefix(f"- `{command}`:").strip()
+        if not reason:
+            errors.append(f"'## Baseline' gives no reason for `{command}`")
+        elif command in reasons:
+            errors.append(f"'## Baseline' names `{command}` twice")
+        else:
+            reasons[command] = reason
+    return reasons, errors
 
 
 def _split(text: str) -> Result[tuple[str, str], str]:
@@ -420,6 +463,11 @@ def parse(text: str, *, require_checklist: bool) -> Result[Card, list[str]]:
             errors.append(f"missing section '## {section.value}'")
         elif not next(text for name, text in sections if name is section):
             errors.append(f"section '## {section.value}' is empty")
+    if Section.BASELINE in present and isinstance(done_when, Ok):
+        baseline = next(text for name, text in sections if name is Section.BASELINE)
+        if not baseline:
+            errors.append("section '## Baseline' is empty; leave it out when every done_when command passes at the base")
+        errors.extend(_baseline_lines(baseline, done_when.value)[1])
     if require_checklist and Section.CHECKLIST not in present:
         errors.append("the sealed card has no '## Checklist' section")
     if not require_checklist and Section.CHECKLIST in present:

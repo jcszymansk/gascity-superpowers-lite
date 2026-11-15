@@ -6,7 +6,7 @@ import tomllib
 from dataclasses import dataclass
 from enum import Enum
 
-from litetools.ladder import Tier
+from litetools.ladder import Blocker, Tier
 from litetools.result import Err, Ok, Result
 
 SCHEMA = "lite.report.v1"
@@ -29,6 +29,9 @@ class Report:
         status: Whether the executor finished or stopped with a blocker.
         commit: The attempt's commit, or empty when it changed nothing.
         summary: The executor's own words.
+        blocker: What blocked the attempt, set only when ``status`` is
+            ``BLOCKED``. Reports written before blockers had a kind carry
+            none and count as ``Blocker.WORK``.
     """
 
     card_id: str
@@ -36,6 +39,7 @@ class Report:
     status: Status
     commit: str
     summary: str
+    blocker: Blocker | None = None
 
 
 def _toml_string(value: str) -> str:
@@ -51,7 +55,8 @@ def render(report: Report) -> str:
         f"tier = {_toml_string(report.tier.value)}\n"
         f"status = {_toml_string(report.status.value)}\n"
         f"commit = {_toml_string(report.commit)}\n"
-        "+++\n\n## Summary\n\n"
+        + (f"blocker = {_toml_string(report.blocker.value)}\n" if report.blocker is not None else "")
+        + "+++\n\n## Summary\n\n"
         f"{report.summary.strip()}\n"
     )
 
@@ -77,10 +82,17 @@ def parse(text: str) -> Result[Report, str]:
     card_id, commit = meta.get("card"), meta.get("commit")
     if tier is None or status is None or not isinstance(card_id, str) or not isinstance(commit, str):
         return Err("the report is missing card, tier, status or commit")
+    blockers = {b.value: b for b in Blocker}
+    raw_blocker = meta.get("blocker")
+    blocker = None if raw_blocker is None else blockers.get(str(raw_blocker))
+    if raw_blocker is not None and blocker is None:
+        return Err(f"the report blocker must be one of {', '.join(sorted(blockers))}")
+    if blocker is not None and status is not Status.BLOCKED:
+        return Err("only a blocked report names a blocker")
     body = "\n".join(lines[end + 1 :]).strip()
     if not body.startswith("## Summary"):
         return Err("the report has no '## Summary' section")
     summary = body.removeprefix("## Summary").strip()
     if not summary:
         return Err("the report summary is empty")
-    return Ok(Report(card_id, tier, status, commit, summary))
+    return Ok(Report(card_id, tier, status, commit, summary, blocker))

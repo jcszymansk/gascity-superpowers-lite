@@ -314,7 +314,10 @@ def test_the_example_card_seals() -> None:
 
 def test_the_template_obeys_the_rule() -> None:
     text = (PACK / "assets" / "templates" / "card.md").read_text(encoding="utf-8")
-    body = text.split("+++", 2)[2]
+    front, body = text.split("+++", 2)[1:]
+    assert 'done_when = ["exact command"]' in front
+    # The template's Baseline names its own placeholder command, which FRONT replaces.
+    body = body.replace("`exact command`", "`cargo test --test parse`")
     assert isinstance(card.parse(cutter_card(body=body), require_checklist=False), Ok)
 
 
@@ -372,3 +375,49 @@ def test_a_card_sealed_before_the_rule_still_parses() -> None:
     assert legacy != sealed.value
     assert isinstance(card.parse(legacy, require_checklist=True), Ok)
     assert isinstance(card.seal(with_done_when("grep -rn old_label app"), "- [ ] keep it simple"), Err)
+
+
+TWO_COMMANDS = FRONT.replace(
+    'done_when = ["cargo test --test parse"]', 'done_when = ["cargo test --test parse", "echo `date` && cargo build"]'
+)
+
+
+def test_a_card_without_a_baseline_has_no_reasons() -> None:
+    result = card.parse(cutter_card(), require_checklist=False)
+    assert isinstance(result, Ok) and result.value.baseline() == {}
+
+
+def test_baseline_gives_the_reason_per_command_even_one_holding_backticks() -> None:
+    body = BODY + (
+        "\n## Baseline\n\n- `cargo test --test parse`: tests/parse.rs gains the empty-header test.\n"
+        "- `echo `date` && cargo build`: the build needs ParseError::Empty.\n"
+    )
+    result = card.parse(cutter_card(TWO_COMMANDS, body), require_checklist=False)
+    assert isinstance(result, Ok), result
+    assert result.value.baseline() == {
+        "cargo test --test parse": "tests/parse.rs gains the empty-header test.",
+        "echo `date` && cargo build": "the build needs ParseError::Empty.",
+    }
+
+
+@pytest.mark.parametrize(
+    ("baseline", "error"),
+    [
+        ("- `cargo test`: shortened", "with a command exactly as in done_when"),
+        ("cargo test --test parse fails", "with a command exactly as in done_when"),
+        ("- `cargo test --test parse`:", "gives no reason for `cargo test --test parse`"),
+        ("- `cargo test --test parse`: new\n- `cargo test --test parse`: again", "names `cargo test --test parse` twice"),
+        ("", "section '## Baseline' is empty"),
+    ],
+)
+def test_a_malformed_baseline_is_refused(baseline: str, error: str) -> None:
+    result = card.parse(cutter_card(body=BODY + f"\n## Baseline\n\n{baseline}\n"), require_checklist=False)
+    assert any(error in e for e in errors_of(result)), result
+
+
+def test_a_sealed_card_keeps_its_baseline_before_the_checklist() -> None:
+    text = cutter_card(body=BODY + "\n## Baseline\n\n- `cargo test --test parse`: the test is new.\n")
+    sealed = card.seal(text, "- run every done_when command")
+    assert isinstance(sealed, Ok), sealed
+    parsed = card.parse(sealed.value, require_checklist=True)
+    assert isinstance(parsed, Ok) and parsed.value.baseline() == {"cargo test --test parse": "the test is new."}

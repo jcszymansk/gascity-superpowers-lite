@@ -18,7 +18,7 @@ from litetools import commands, donewhen
 from litetools.commands import Ctx, Outcome
 from litetools.context import load_env
 from litetools.gc import Gc
-from litetools.ladder import Verdict
+from litetools.ladder import Blocker, Verdict
 from litetools.result import Err
 
 log = logging.getLogger("litetools")
@@ -37,7 +37,13 @@ def _parser() -> argparse.ArgumentParser:
     finish_card.add_argument("--blocked", help="the work bead cannot become cards (unclear, or needs a human decision), and why")
     finish = sub.add_parser("attempt-finish")
     finish.add_argument("--summary", help="what the attempt changed and why")
-    finish.add_argument("--blocked", help="why the card cannot be done as written")
+    finish.add_argument("--blocked", help="why the attempt cannot be finished")
+    finish.add_argument(
+        "--blocker",
+        choices=[b.value for b in Blocker],
+        help="with --blocked: card when the card cannot be met as written, work when the card is sound "
+        "but the change could not be made to work",
+    )
     decide = sub.add_parser("verdict")
     decide.add_argument("choice", choices=[v.value for v in Verdict])
     decide.add_argument("--reason", help="the problems found, or why the attempt cannot be fixed; required unless approving")
@@ -84,7 +90,8 @@ def _dispatch(ctx: Ctx, args: argparse.Namespace) -> Outcome:
     if args.command == "cut-card-finish":
         return commands.cut_card_finish(ctx, args.blocked)
     if args.command == "attempt-finish":
-        return commands.attempt_finish(ctx, args.summary, args.blocked)
+        blocker = Blocker(args.blocker) if args.blocker is not None else None
+        return commands.attempt_finish(ctx, args.summary, args.blocked, blocker)
     if args.command == "run":
         return commands.run(ctx, args.shell_command)
     if args.command == "verdict":

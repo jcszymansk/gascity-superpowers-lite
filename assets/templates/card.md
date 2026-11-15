@@ -29,3 +29,7 @@ pins down. No code: the executor writes the tests and the implementation.
 ## Out of scope
 
 What not to touch, and when to stop and report a blocker instead of improvising.
+
+## Baseline
+
+- `exact command`: why it fails before this card's work exists (leave the section out if none does)
