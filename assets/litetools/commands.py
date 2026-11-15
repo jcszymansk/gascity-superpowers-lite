@@ -54,6 +54,10 @@ from litetools.result import Err, Ok, Result
 log = logging.getLogger(__name__)
 
 DONE_WHEN_TIMEOUT_SECONDS = 15 * 60
+BASE_CHECKED = "lite.base_checked"
+"""Set when the item's cards were cut knowing ``## Baseline``. A card cut
+before it has no way to explain a command that fails at its base, so its
+base check would block a sound card."""
 OPEN_STATUSES = ("open", "in_progress")
 _DRAFT_NAME = re.compile(r"(?P<number>[1-9][0-9]*)\.md")
 
@@ -743,7 +747,8 @@ def cut_card_finish(ctx: Ctx, blocked: str | None) -> Outcome:
         if isinstance(written, Err):
             return written
     recorded = ctx.gc.set_metadata(
-        item.anchor.bead_id, {"lite.cards": str(total), "lite.card": "1", **_kinds_metadata(parsed)}
+        item.anchor.bead_id,
+        {"lite.cards": str(total), "lite.card": "1", BASE_CHECKED: "true", **_kinds_metadata(parsed)},
     )
     if isinstance(recorded, Err):
         return recorded
@@ -858,7 +863,7 @@ def attempt_start(ctx: Ctx) -> Outcome:
     reset = gitops.reset_to(workdir.value, start.value)
     if isinstance(reset, Err):
         return reset
-    if ref.number > 1 and attempt == first_attempt(Tier.T1):
+    if ref.number > 1 and attempt == first_attempt(Tier.T1) and item.anchor.meta(BASE_CHECKED) == "true":
         based = _base_check(ctx, workdir.value, start.value, scope.value.card, donewhen.State(files.base_dir))
         if isinstance(based, Err):
             return based

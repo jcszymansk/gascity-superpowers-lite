@@ -645,6 +645,9 @@ So `done_when` runs once at each card's base, before any attempt, and must make 
   Its first T1 `attempt-start` runs the same check after the reset, before the executor gets the
   card; on a failure lite closes the attempt itself with a `card` blocker, and verify blocks the
   item without spending an executor session.
+  Only cards cut knowing the Baseline get it (`lite.base_checked`, set by `cut-card-finish`):
+  an item cut before had no way to explain a command meant to fail at its base, and the first
+  pin blocked a sound fifth card this way.
 - A run that outlasts `LITE_VERIFY_WAIT_SECONDS` leaves the step open and says so; calling the
   command again attaches to the run, as `verify` does.
 

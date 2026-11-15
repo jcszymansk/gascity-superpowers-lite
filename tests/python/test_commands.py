@@ -646,6 +646,23 @@ def test_a_later_card_failing_at_its_base_is_blocked_by_the_card_without_an_exec
     assert "no stronger tier was tried" in mail[0]["body"]
 
 
+def test_a_later_card_cut_before_baselines_existed_gets_no_base_check(world: World) -> None:
+    prepared(world)
+    world.draft(1).write_text(CARD)
+    world.draft(2).write_text(without_baseline(CARD_2))
+    assert world.claim_and_run("s-cut", "cut-card", "cut-card-finish").returncode == 0
+    assert world.meta(ANCHOR)["lite.base_checked"] == "true"
+    state = world.state
+    del state["beads"][ANCHOR]["metadata"]["lite.base_checked"]
+    world.save(state)
+    pass_first_card(world)
+    started = world.claim_and_run("s-att-c2", "attempt", "attempt-start", tier="t1")
+    assert started.returncode == 0, started.stderr
+    assert "Lite closed this attempt" not in started.stdout
+    assert world.meta("s-att-c2")["lite.attempt_started"] == "true"
+    assert not (world.card_dir(2) / "base").exists()
+
+
 def test_a_later_card_explained_by_its_baseline_starts_for_the_executor(world: World) -> None:
     sealed_two(world)
     pass_first_card(world)
