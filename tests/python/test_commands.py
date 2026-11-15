@@ -1470,6 +1470,22 @@ def test_cut_card_start_clears_drafts_of_an_earlier_run_but_not_its_own(world: W
     assert world.meta(ANCHOR)["lite.cards"] == "1"
 
 
+def test_cut_card_start_moves_an_earlier_runs_cards_aside_and_keeps_its_own(world: World) -> None:
+    prepared(world)
+    old_attempt = world.artifacts / "cards" / "3" / "attempts" / "t1" / "report.md"
+    old_attempt.parent.mkdir(parents=True)
+    old_attempt.write_text("an earlier run's report")
+    started = world.claim_and_run("s-cut", "cut-card", "cut-card-start")
+    assert started.returncode == 0, started.stderr
+    assert not (world.artifacts / "cards").exists()
+    kept = list((world.artifacts / "earlier").glob("*/cards/3/attempts/t1/report.md"))
+    assert len(kept) == 1 and kept[0].read_text() == "an earlier run's report"
+    world.draft(1).write_text(CARD)
+    finished = world.run("cut-card-finish")
+    assert finished.returncode == 0, finished.stderr
+    assert (world.card_dir(1) / "card.md").exists() and not world.card_dir(3).exists()
+
+
 # --- profiling records ---------------------------------------------------------
 
 STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")

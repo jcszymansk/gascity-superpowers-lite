@@ -508,6 +508,9 @@ def cut_card_start(ctx: Ctx) -> Outcome:
         cleared = _clear_drafts(layout)
         if isinstance(cleared, Err):
             return cleared
+        archived = _archive_cards(layout)
+        if isinstance(archived, Err):
+            return archived
         marked = ctx.gc.set_metadata(item.step.bead_id, {"lite.cut_started": "true"})
         if isinstance(marked, Err):
             return marked
@@ -550,6 +553,25 @@ def _clear_drafts(layout: Layout) -> Result[None, str]:
             shutil.rmtree(layout.drafts)
     except OSError as error:
         return Err(f"could not clear the old drafts in {layout.drafts}: {error}")
+    return Ok(None)
+
+
+def _archive_cards(layout: Layout) -> Result[None, str]:
+    """Move an earlier run's cards aside, so a new cut neither mixes with them nor loses their attempts.
+
+    A bead dispatched again keeps its artifact directory. Without this, a cut
+    into fewer cards left the old higher-numbered cards beside the new ones,
+    and the new cards' attempts landed among the old attempts of the same key.
+    """
+    if not layout.cards.is_dir():
+        return Ok(None)
+    target = layout.earlier(datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ"))
+    try:
+        target.mkdir(parents=True)
+        layout.cards.rename(target / "cards")
+    except OSError as error:
+        return Err(f"could not move the earlier cards in {layout.cards} aside: {error}")
+    log.info("moved the cards of an earlier run to %s", target)
     return Ok(None)
 
 

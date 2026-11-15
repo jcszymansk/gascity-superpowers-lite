@@ -250,6 +250,7 @@ class Layout:
         <root>/drafts/1.md, 2.md ...      the cutter's drafts, in card order
         <root>/cards/<n>/card.md          sealed card n
         <root>/cards/<n>/attempts/<key>/  report, diff, findings, checks
+        <root>/earlier/<stamp>/cards/     the cards of an earlier run of the same bead
 
     Attributes:
         root: ``<city>/.gc/artifacts/<rig>/superpowers-lite/<anchor id>``.
@@ -266,9 +267,18 @@ class Layout:
         """The draft of card ``number``."""
         return self.drafts / f"{number}.md"
 
+    @property
+    def cards(self) -> Path:
+        """The directory holding every numbered card."""
+        return self.root / "cards"
+
+    def earlier(self, stamp: str) -> Path:
+        """Where the cards of an earlier run, cut before ``stamp``, are kept."""
+        return self.root / "earlier" / stamp
+
     def card(self, ref: CardRef) -> CardLayout:
         """The files of one card."""
-        return CardLayout(self.root if ref.legacy else self.root / "cards" / str(ref.number))
+        return CardLayout(self.root if ref.legacy else self.cards / str(ref.number))
 
 
 def layout_for(env: Env, anchor_id: str) -> Layout:
