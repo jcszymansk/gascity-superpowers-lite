@@ -182,3 +182,12 @@ def test_the_work_formula_declares_every_budget_var_unset() -> None:
     for setting in budget.SETTINGS:
         assert declared[setting.var_name]["default"] == ""
         assert "1 to 10" in declared[setting.var_name]["description"]
+
+
+def test_executor_prompts_allow_unlisted_files_as_the_attempt_step_does() -> None:
+    step = (PACK / "assets" / "workflows" / "superpowers-lite-work-item" / "attempt.md").read_text(encoding="utf-8")
+    assert "say in your summary which file and" in step
+    for tier in TIERS:
+        prompt = (PACK / "agents" / f"executor-{tier}" / "prompt.template.md").read_text(encoding="utf-8")
+        assert "only the files" not in prompt, tier
+        assert "say in your summary which" in prompt and "the reviewer judges it" in prompt, tier
