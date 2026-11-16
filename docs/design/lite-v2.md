@@ -512,8 +512,9 @@ Verdicts the reviewer does not write:
 - A blocker in the card (`--blocker card`, or lite's base check, below) blocks the item at once,
   whatever the tier and budget, and skips the T3 gate: every tier gets the same card and stops in
   the same place. The anchor records `lite.blocked_on = card` (`tiers` for an item that ran out of
-  tiers), and the mail says no stronger tier was tried. A report written before blockers had a
-  kind counts as a work blocker.
+  tiers) and the reason whole in `lite.blocked_reason` (the executor's own words for a blocker,
+  else the last verdict's reason), and the mail says no stronger tier was tried. A report written
+  before blockers had a kind counts as a work blocker.
 
 A tier runs up to `attempts × rounds` executor sessions and at most as many reviews. Only
 attempts that pass every check reach a reviewer.

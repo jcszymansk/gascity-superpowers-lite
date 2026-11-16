@@ -1103,13 +1103,15 @@ def _approved_commit(files: CardLayout, attempt: Attempt) -> Result[str, str]:
 
 def _decision_metadata(
     item: Item, scope: CardScope, attempt: Attempt, verdict: Verdict, decision: Decision, why: str,
-    blocker: Blocker | None,
+    blocker: Blocker | None, blocked_why: str,
 ) -> Result[dict[str, str], str]:
     """Return what the anchor records about a verified attempt.
 
     An approval that leaves cards to do moves the anchor to the next card and
     records where that card starts; the last card's approval records the
-    tier the whole item passed at, which ``land`` requires.
+    tier the whole item passed at, which ``land`` requires. A blocked item
+    records ``blocked_why`` whole as ``lite.blocked_reason``, so whoever
+    redoes the item reads the reason without opening the artifacts.
     """
     ref = scope.ref
     approved = verdict is Verdict.APPROVE
@@ -1136,14 +1138,15 @@ def _decision_metadata(
     if decision.action is Action.BLOCKED:
         values["lite.result"] = "blocked"
         values["lite.blocked_on"] = "card" if blocker is Blocker.CARD else "tiers"
+        values["lite.blocked_reason"] = blocked_why
     return Ok(values)
 
 
 def _record_decision(
     ctx: Ctx, item: Item, scope: CardScope, attempt: Attempt, verdict: Verdict, decision: Decision, why: str,
-    blocker: Blocker | None,
+    blocker: Blocker | None, blocked_why: str,
 ) -> Result[None, str]:
-    values = _decision_metadata(item, scope, attempt, verdict, decision, why, blocker)
+    values = _decision_metadata(item, scope, attempt, verdict, decision, why, blocker, blocked_why)
     if isinstance(values, Err):
         return values
     recorded = ctx.gc.set_metadata(item.anchor.bead_id, values.value)
@@ -1189,13 +1192,21 @@ def _mail_human(ctx: Ctx, subject: str, body: str) -> None:
 
 
 def _close_verify(
-    ctx: Ctx, item: Item, scope: CardScope, attempt: Attempt, verdict: Verdict, why: str, blocker: Blocker | None = None
+    ctx: Ctx, item: Item, scope: CardScope, attempt: Attempt, verdict: Verdict, why: str, blocked_why: str,
+    blocker: Blocker | None = None,
 ) -> Outcome:
+    """Record the verdict on the anchor and close the verify step.
+
+    Args:
+        why: The verdict's short reason, for the attempt record and the step's close reason.
+        blocked_why: The full reason recorded as ``lite.blocked_reason`` when the verdict blocks the item.
+        blocker: What the executor reported as blocking it, or None when it reported a change.
+    """
     limits = _tier_limits(item, attempt.tier)
     if isinstance(limits, Err):
         return limits
     decision = decide(attempt, verdict, blocker, scope.ref.is_last, limits.value)
-    recorded = _record_decision(ctx, item, scope, attempt, verdict, decision, why, blocker)
+    recorded = _record_decision(ctx, item, scope, attempt, verdict, decision, why, blocker, blocked_why)
     if isinstance(recorded, Err):
         return recorded
     which = "" if scope.ref.total == 1 else f"{scope.ref.label} "
@@ -1465,7 +1476,8 @@ def _verify(ctx: Ctx, item: Item) -> Outcome:
             why += f" (again after the previous round: {', '.join(repeated)})"
         # A blocker escalates from the card's base, so it is recorded as the restart it is.
         choice = Verdict.RESTART if repeated or quick.value.blocker is not None else Verdict.CORRECT
-        return _close_verify(ctx, item, scope.value, attempt, choice, why, blocker=quick.value.blocker)
+        blocked_why = report.summary if quick.value.blocker is not None and report is not None else why
+        return _close_verify(ctx, item, scope.value, attempt, choice, why, blocked_why, blocker=quick.value.blocker)
     marked = ctx.gc.set_metadata(item.step.bead_id, {"lite.checks": "passed", "lite.checks_at": _now()})
     if isinstance(marked, Err):
         return marked
@@ -1588,7 +1600,7 @@ def verdict(ctx: Ctx, choice: Verdict, reason: str | None) -> Outcome:
         if isinstance(written, Err):
             return written
     why = "review approved" if choice is Verdict.APPROVE else f"review: {text}"
-    return _close_verify(ctx, item, scope.value, attempt, choice, why)
+    return _close_verify(ctx, item, scope.value, attempt, choice, why, why)
 
 
 # --- approval, land, close ---------------------------------------------------

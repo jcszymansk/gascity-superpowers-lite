@@ -641,6 +641,7 @@ def test_a_later_card_failing_at_its_base_is_blocked_by_the_card_without_an_exec
     assert output(world, "s-ver-c2") == {"next": []}
     assert world.meta("s-ver-c2")["gc.outcome"] == "fail"
     assert world.meta(ANCHOR)["lite.result"] == "blocked" and world.meta(ANCHOR)["lite.blocked_on"] == "card"
+    assert "grep -q polished src/app.txt" in world.meta(ANCHOR)["lite.blocked_reason"]
     mail = world.state["mail"]
     assert len(mail) == 1 and mail[0]["subject"] == "blocked by its card: st-1"
     assert "no stronger tier was tried" in mail[0]["body"]
@@ -976,6 +977,7 @@ def test_a_card_blocker_blocks_the_item_at_once_and_mails_a_human(world: World) 
     assert output(world, "s-ver-t1") == {"next": []}
     assert world.meta("s-ver-t1")["gc.outcome"] == "fail"
     assert world.meta(ANCHOR)["lite.result"] == "blocked" and world.meta(ANCHOR)["lite.blocked_on"] == "card"
+    assert world.meta(ANCHOR)["lite.blocked_reason"] == "done_when needs a main class the card forbids"
     mail = world.state["mail"]
     assert len(mail) == 1 and mail[0]["to"] == "human" and mail[0]["subject"] == "blocked by its card: st-1"
     assert str(world.card_dir() / "attempts" / "t1" / "findings.md") in mail[0]["body"]
@@ -1100,6 +1102,7 @@ def test_rejection_at_t3_blocks_and_fails(world: World) -> None:
     assert world.meta("s-ver-t3")["gc.outcome"] == "fail"
     assert world.meta(ANCHOR)["lite.result"] == "blocked"
     assert world.meta(ANCHOR)["lite.blocked_on"] == "tiers"
+    assert world.meta(ANCHOR)["lite.blocked_reason"] == "failed checks: card-done"
     mail = world.state["mail"]
     assert len(mail) == 1 and mail[0]["to"] == "human" and mail[0]["subject"] == "blocked: st-1"
     assert "failed at every tier" in mail[0]["body"] and "failed checks: card-done" in mail[0]["body"]
