@@ -58,12 +58,53 @@ def init_submodules(worktree: Path) -> Result[None, str]:
     ``git worktree add`` leaves submodule directories empty, and a build that
     includes one (a Gradle ``includeBuild``, say) fails in such a worktree.
     A worktree without ``.gitmodules`` is left alone.
+
+    A linked worktree keeps its submodules under its own git dir, so a plain
+    ``submodule update`` clones every one from its remote again (minutes for a
+    large one, past ``GIT_TIMEOUT_SECONDS``). Submodules the rig has already
+    cloned are cloned from that local copy instead (``local_submodule_urls``).
+    The URLs go in as ``-c`` options, never into the config: linked worktrees
+    share the rig's ``.git/config``, so writing them there would repoint the
+    rig's own submodules.
     """
     if not (worktree / ".gitmodules").is_file():
         return Ok(None)
-    log.info("initialising submodules in %s", worktree)
-    out = git(worktree, "submodule", "update", "--init", "--recursive")
+    local = local_submodule_urls(worktree)
+    if isinstance(local, Err):
+        return Err(f"could not check out submodules: {local.error}")
+    overrides = [option for name, url in local.value for option in ("-c", f"submodule.{name}.url={url}")]
+    if overrides:
+        overrides += ["-c", "protocol.file.allow=always"]
+    log.info("initialising submodules in %s (%d from the rig's clones)", worktree, len(local.value))
+    out = git(worktree, *overrides, "submodule", "update", "--init", "--recursive")
     return Ok(None) if isinstance(out, Ok) else Err(f"could not check out submodules: {out.error}")
+
+
+def local_submodule_urls(worktree: Path) -> Result[tuple[tuple[str, str], ...], str]:
+    """Pair each top-level submodule of ``worktree`` with the rig's clone of it, where one exists.
+
+    Git keeps a submodule's repository at ``<common git dir>/modules/<name>``
+    once the main checkout has cloned it. Submodules without one are left out
+    and come from their remote.
+    """
+    common = git(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if isinstance(common, Err):
+        return common
+    listed = git(worktree, "config", "-f", ".gitmodules", "--get-regexp", r"^submodule\..*\.path$")
+    if isinstance(listed, Err):
+        # git config exits 1 when nothing matches: a .gitmodules without submodules.
+        return Ok(())
+    modules = Path(common.value.strip()) / "modules"
+    pairs = []
+    for line in listed.value.splitlines():
+        key = line.split(" ", 1)[0]
+        name = key.removeprefix("submodule.").removesuffix(".path")
+        clone = modules / name
+        if (clone / "HEAD").is_file():
+            pairs.append((name, str(clone)))
+        else:
+            log.debug("submodule %s has no clone in %s; it comes from its remote", name, modules)
+    return Ok(tuple(pairs))
 
 
 def is_ancestor(repo: Path, older: str, newer: str) -> bool:
