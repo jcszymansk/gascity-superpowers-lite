@@ -320,8 +320,10 @@ def _blocked_by(world: World, *blockers: dict[str, Any]) -> None:
     [
         {"id": "st-p", "status": "closed", "metadata": {"lite.result": "landed"}},
         {"id": "st-p", "status": "closed"},
+        {"id": "st-p", "status": "closed", "metadata": {"lite.result": "uncuttable"}},
+        {"id": "st-p", "status": "closed", "metadata": {"lite.result": "blocked"}},
     ],
-    ids=["landed", "closed-by-a-human"],
+    ids=["landed", "closed-by-a-human", "closed-by-a-human-after-uncuttable", "closed-by-a-human-after-blocked"],
 )
 def test_prepare_worktree_proceeds_when_every_predecessor_is_done(world: World, blocker: dict[str, Any]) -> None:
     _blocked_by(world, blocker)
@@ -336,9 +338,8 @@ def test_prepare_worktree_proceeds_when_every_predecessor_is_done(world: World, 
         ({"id": "st-p", "status": "open", "metadata": {"lite.result": "uncuttable"}}, "st-p (open, lite.result=uncuttable)"),
         ({"id": "st-p", "status": "open"}, "st-p (open, lite.result=none)"),
         ({"id": "st-p", "status": "in_progress", "metadata": {"lite.result": "landed"}}, "st-p (in_progress, lite.result=landed)"),
-        ({"id": "st-p", "status": "closed", "metadata": {"lite.result": "blocked"}}, "st-p (closed, lite.result=blocked)"),
     ],
-    ids=["failed-item", "never-ran", "not-closed", "closed-without-landing"],
+    ids=["failed-item", "never-ran", "not-closed"],
 )
 def test_prepare_worktree_skips_an_item_whose_predecessor_did_not_land(
     world: World, blocker: dict[str, Any], shown: str

@@ -144,8 +144,9 @@ form one gc scope with `gc.on_fail = "abort_scope"`: when one closes failed (a w
 cannot be prepared, an uncuttable bead, a blocked verify), gc skips the steps still waiting,
 including those verify bonded at runtime, and the item fails. A failed item does not stop the
 drain, but its `blocks` successors do not run on a target that lacks it: prepare-worktree fails
-an item whose predecessor is not closed, or closed with a `lite.result` other than `landed`, and
-records `lite.result = skipped`. A predecessor a human closed without lite counts as done.
+an item whose predecessor is still open, and records `lite.result = skipped`. Lite closes a work
+bead only once it lands, so a closed predecessor is done: closing a failed bead by hand, whatever
+its `lite.result`, lets the chain go on without it.
 
 The work bead records the outcome: `lite.cards` and the current `lite.card`, `lite.kind` (each
 card's kind once, comma-separated), one `lite.attempt.<attempt>` entry per attempt (`t1`, `t1.r2` for round 2,

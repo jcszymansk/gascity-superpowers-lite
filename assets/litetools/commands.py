@@ -356,17 +356,19 @@ def _resolve_budget(ctx: Ctx, item: Item) -> Result[budget.Budget, str]:
 
 
 def _unlanded_blockers(anchor: Bead) -> list[str]:
-    """Describe each ``blocks`` predecessor of ``anchor`` that has not landed.
+    """Describe each ``blocks`` predecessor of ``anchor`` that is not done.
 
-    A predecessor counts as done when it is closed and lite did not record a
-    failed result on it; a bead closed by a human without lite counts as done.
-    The drain starts an item only after its predecessors' items finish, so an
-    open predecessor here is one whose item failed.
+    A closed predecessor is done. Lite closes a work bead only once it has
+    landed (``close_anchor``) and leaves a failed one open, so a closed bead
+    whose ``lite.result`` is not ``landed`` was closed by a human after its
+    item failed: that human decided the chain goes on without it. The drain
+    starts an item only after its predecessors' items finish, so an open
+    predecessor here is one whose item failed.
     """
     return [
         f"{b.bead_id} ({b.status}, lite.result={b.meta('lite.result') or 'none'})"
         for b in anchor.blocked_by
-        if b.status != "closed" or b.meta("lite.result") not in ("", "landed")
+        if b.status != "closed"
     ]
 
 
