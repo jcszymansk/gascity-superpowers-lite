@@ -439,6 +439,59 @@ def test_claim_refuses_a_bead_routed_elsewhere(world: World) -> None:
     assert result.returncode == 1 and "routed to other.agent" in result.stderr
 
 
+def _in_item_scope(world: World, bead_id: str, *, on_fail: str = "abort_scope") -> None:
+    state = world.state
+    state["beads"][bead_id]["metadata"] |= {"gc.scope_ref": "item", "gc.scope_role": "member", "gc.on_fail": on_fail}
+    world.save(state)
+
+
+def _sibling(world: World, bead_id: str, outcome: str, *, root: str = ROOT, status: str = "closed") -> None:
+    state = world.state
+    state["beads"][bead_id] = {
+        "id": bead_id, "status": status, "title": f"sibling {outcome}", "description": "", "assignee": "",
+        "metadata": {"gc.root_bead_id": root, "gc.scope_ref": "item", "gc.on_fail": "abort_scope", "gc.outcome": outcome},
+    }
+    world.save(state)
+
+
+def test_claim_closes_a_step_failed_when_an_earlier_step_of_its_item_failed(world: World) -> None:
+    world.add_step("s-att", "attempt", "t1")
+    _in_item_scope(world, "s-att")
+    _sibling(world, "s-cut", "fail")
+    result = world.run("claim")
+    assert result.returncode == 0, result.stderr
+    assert "Exit now" in result.stdout
+    step = world.bead("s-att")
+    assert step["status"] == "closed"
+    assert step["metadata"]["gc.outcome"] == "fail"
+    assert step["close_reason"] == "skipped: an earlier step of this item failed: s-cut (sibling fail)"
+    claims = world.city / ".gc" / "runtime" / "superpowers-lite" / "claims" / f"{ME}.json"
+    assert not claims.exists()
+    assert world.state["drained"] == 1
+
+
+@pytest.mark.parametrize(
+    ("sibling", "outcome", "root", "status", "on_fail"),
+    [
+        ("s-cut", "pass", ROOT, "closed", "abort_scope"),
+        ("s-cut", "fail", "st-wf-other", "closed", "abort_scope"),
+        ("s-cut", "fail", ROOT, "in_progress", "abort_scope"),
+        ("s-cut", "fail", ROOT, "closed", ""),
+    ],
+    ids=["sibling-passed", "failure-in-another-item", "sibling-not-closed", "step-outside-an-abort-scope"],
+)
+def test_claim_works_the_step_when_no_earlier_step_of_its_item_failed(
+    world: World, sibling: str, outcome: str, root: str, status: str, on_fail: str
+) -> None:
+    world.add_step("s-att", "attempt", "t1")
+    _in_item_scope(world, "s-att", on_fail=on_fail)
+    _sibling(world, sibling, outcome, root=root, status=status)
+    result = world.run("claim")
+    assert result.returncode == 0, result.stderr
+    assert "Claimed step s-att" in result.stdout
+    assert world.bead("s-att")["status"] != "closed"
+
+
 def test_commands_refuse_a_step_of_another_kind(world: World) -> None:
     result = world.claim_and_run("s-x", "land", "verify")
     assert result.returncode == 1

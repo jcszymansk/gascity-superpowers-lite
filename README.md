@@ -148,6 +148,11 @@ an item whose predecessor is still open, and records `lite.result = skipped`. Li
 bead only once it lands, so a closed predecessor is done: closing a failed bead by hand, whatever
 its `lite.result`, lets the chain go on without it.
 
+gc runs the abort when a member closes, and has been seen to miss the failed outcome and run none,
+leaving the next step claimable. `claim` therefore checks the item's scope first: a step claimed
+after a member closed failed closes itself failed (`skipped: an earlier step of this item
+failed: ...`) instead of being worked, which triggers the abort again.
+
 The work bead records the outcome: `lite.cards` and the current `lite.card`, `lite.kind` (each
 card's kind once, comma-separated), one `lite.attempt.<attempt>` entry per attempt (`t1`, `t1.r2` for round 2,
 `t1.a2` for a second attempt, `t2.a2.r3`; `approved`, or `correct: ` or `restart: ` and the check

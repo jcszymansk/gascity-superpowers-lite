@@ -297,7 +297,45 @@ def claim(ctx: Ctx) -> Outcome:
     saved = save_claim(ctx.env, bead_id)
     if isinstance(saved, Err):
         return saved
+    failed = _failed_scope_member(ctx, step)
+    if isinstance(failed, Err):
+        return failed
+    if failed.value:
+        reason = f"skipped: an earlier step of this item failed: {failed.value}"
+        closed = _close_step(ctx, step, "fail", reason)
+        if isinstance(closed, Err):
+            return closed
+        return Ok(Done(f"Claimed {bead_id}, but {reason}. Closed it failed so gc aborts the item. Exit now.", drain=True))
     return Ok(Done(f"Claimed step {bead_id}: {step.title}\n\n{step.description.strip()}\n"))
+
+
+def _failed_scope_member(ctx: Ctx, step: Bead) -> Result[str, str]:
+    """Name a member of ``step``'s abort scope that already closed failed, or return "".
+
+    gc's scope check aborts the rest of an item when a member closes with
+    ``gc.outcome=fail``, but it reads the member once, when it closes, and has
+    been seen to read it without the outcome (2026-11-18: a cut step closed
+    uncuttable, the abort never ran, and executors claimed and refused the
+    attempt for an hour). A step claimed after a failed sibling closes itself
+    failed instead of working, which gives the scope check a second chance.
+    """
+    root_id, scope = step.meta("gc.root_bead_id"), step.meta("gc.scope_ref")
+    if not root_id or not scope or step.meta("gc.on_fail") != "abort_scope":
+        return Ok("")
+    listed = ctx.gc.bd(
+        "list", "--metadata-field", f"gc.root_bead_id={root_id}", "--metadata-field", f"gc.scope_ref={scope}",
+        "--metadata-field", "gc.outcome=fail", "--status", "closed", "--include-ephemeral", "--limit", "0", "--json",
+    )
+    if isinstance(listed, Err):
+        return listed
+    try:
+        failed = [(b["id"], b.get("title", "")) for b in json.loads(listed.value) if b["id"] != step.bead_id]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return Err("gc bd list printed unexpected JSON")
+    if not failed:
+        return Ok("")
+    log.warning("step %s: scope %s of %s already failed at %s", step.bead_id, scope, root_id, failed[0][0])
+    return Ok(f"{failed[0][0]} ({failed[0][1]})")
 
 
 # --- prepare-worktree --------------------------------------------------------
